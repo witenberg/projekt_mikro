@@ -38,7 +38,7 @@ UART_HandleTypeDef huart2;
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define UART_BUFFER_SIZE 256
+#define UART_BUFFER_SIZE 750
 
 
 #define FRAME_START 0x3A
