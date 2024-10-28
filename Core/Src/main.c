@@ -39,11 +39,10 @@ UART_HandleTypeDef huart2;
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define UART_BUFFER_SIZE 256
-#define DHT_BUFFER_SIZE 750
+
+
 #define FRAME_START 0x3A
 #define FRAME_END 0x3B
-
-#define DHT11_PIN PA0
 
 /* USER CODE END PD */
 
@@ -58,24 +57,18 @@ UART_HandleTypeDef huart2;
 
 
 /* === FLAGS === */
-int frameHunting = 1;
 
 /* === UART Receive === */
 volatile uint8_t buf_RX[UART_BUFFER_SIZE];
-volatile uint8_t IDX_RX_EMPTY = 0;
-volatile uint8_t IDX_RX_BUSY = 0;
+volatile uint16_t IDX_RX_EMPTY = 0;
+volatile uint16_t IDX_RX_BUSY = 0;
 
 
 /* === UART Transmit === */
 volatile uint8_t buf_TX[UART_BUFFER_SIZE];
-volatile uint8_t IDX_TX_EMPTY = 0;
-volatile uint8_t IDX_TX_BUSY = 0;
+volatile uint16_t IDX_TX_EMPTY = 0;
+volatile uint16_t IDX_TX_BUSY = 0;
 
-
-/* === DHT Receive === */
-volatile uint8_t dht_buf_RX[DHT_BUFFER_SIZE];
-volatile uint8_t DHT_RX_EMPTY = 0;
-volatile uint8_t DHT_RX_BUSY = 0;
 
 
 
@@ -104,28 +97,99 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+
+/* === INDEX INCREMENTING FUNCTIONS === */
+void increase_tx_busy() {
+    IDX_TX_BUSY = (IDX_TX_BUSY + 1) % UART_BUFFER_SIZE;
+}
+
+void increase_tx_empty() {
+    IDX_TX_EMPTY = (IDX_TX_EMPTY + 1) % UART_BUFFER_SIZE;
+}
+
+void increase_rx_busy() {
+    IDX_RX_BUSY = (IDX_RX_BUSY + 1) % UART_BUFFER_SIZE;
+}
+
+void increase_rx_empty() {
+    IDX_RX_EMPTY = (IDX_RX_EMPTY + 1) % UART_BUFFER_SIZE;
+}
+
+
+/* === BUFFER EMPTY CHECK FUNCTIONS === */
+int tx_has_data() {
+    return IDX_TX_EMPTY != IDX_TX_BUSY;
+}
+
+int rx_has_data() {
+    return IDX_RX_EMPTY != IDX_RX_BUSY;
+}
+
+
+
 /* === USART CALLBACK RECEIVE === */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-	if (huart -> Instance == USART2) {
-		IDX_RX_EMPTY++;
-		if (IDX_RX_EMPTY >= buf_RX_length) {
-			IDX_RX_EMPTY = 0;
-		}
+	if (huart == &huart2) {
+		// Wyłączenie przerwań, aby uniknąć zakłóceń w trakcie ustawiania danych do wysłania
+		__disable_irq();
+
+		increase_rx_empty();
+
+		// Odbieranie
 		HAL_UART_Receive_IT(&huart2, &buf_RX[IDX_RX_EMPTY], 1);
+
+		// Włączenie przerwań
+		__enable_irq();
 	}
 }
 
-/* === USART CALLBACK TRANSMIT === */
+/* === USART TRANSMIT CALLBACK === */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
-	if (IDX_TX_BUSY != IDX_TX_EMPTY) {
-		uint8_t tmp = buf_TX[IDX_TX_BUSY];
-		IDX_TX_BUSY++;
-		if (IDX_TX_BUSY >= UART_BUFFER_SIZE) {
-			IDX_TX_BUSY = 0;
-		}
-		HAL_UART_Transmit_IT(&huart2, &tmp, 1);
+    if (huart == &huart2) {
+        // Sprawdzenie, czy są kolejne dane do wysłania
+        if (tx_has_data()) {
+        	// Wyłączenie przerwań, aby uniknąć zakłóceń w trakcie ustawiania danych do wysłania
+        	__disable_irq();
+
+            HAL_UART_Transmit_IT(huart, (uint8_t *)&buf_TX[IDX_TX_BUSY], 1);
+            increase_tx_busy();
+
+            // Włączenie przerwań
+            __enable_irq();
+        }
+    }
+}
+
+
+void send(char* msg) {
+
+	// Ustawienie wskaźnika na koniec bufora
+	uint16_t idx = IDX_TX_EMPTY;
+
+	// Kopiowanie danych do bufora
+	for (int i=0; i<strlen(msg); i++) {
+		buf_TX[idx] = msg[i];
+		idx = (idx + 1) % UART_BUFFER_SIZE;
+	}
+
+	IDX_TX_EMPTY = idx;
+
+	// Sprawdzenie, czy nadawanie jest gotowe i czy nie ma zaległych danych do wysłania
+	if (!tx_has_data() && (__HAL_UART_GET_FLAG(&huart2, UART_FLAG_TXE) == SET)) {
+
+		// Wyłączenie przerwań, aby uniknąć zakłóceń w trakcie ustawiania danych do wysłania
+		__disable_irq();
+
+		// Wysyłanie
+		HAL_UART_Transmit_IT(&huart2, (uint8_t *)&buf_TX[IDX_TX_BUSY], 1);
+		increase_tx_busy();
+
+		// Włączenie przerwań
+		__enable_irq();
 	}
 }
+
+
 
 /* USER CODE END 0 */
 
@@ -160,7 +224,10 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_TIM2_Init();
+
   /* USER CODE BEGIN 2 */
+
+  HAL_UART_Receive_IT(&huart2, &buf_RX[IDX_RX_EMPTY], 1);
 
   TIM2_Init();
   DHT11_GPIO_Init();
@@ -171,38 +238,6 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  uint8_t singleFrameChar = buf_RX[IDX_RX_BUSY];
-
-	  if (IDX_RX_BUSY != IDX_RX_EMPTY) {
-		  if (frameHunting == 1) {
-			  //singleFrameChar = buf_RX[IDX_RX_BUSY];
-
-			  if (singleFrameChar == 0x3A) {
-				  frameHunting = 0;
-				  frameLength = 1;
-				  frame.start = 0x3A;
-			  }
-
-			  IDX_RX_BUSY++;
-			  if (IDX_RX_BUSY >= buf_RX_length)
-				  IDX_RX_BUSY = 0;
-
-		  }
-		  else {
-			  //singleFrameChar = buf_RX[IDX_RX_BUSY];
-			  if (singleFrameChar == 0x3A && frameLength == 1)
-				  continue;
-			  else if (singleFrameChar == 0x3B) {
-				  frame.end = 0x3B;
-				  // obsluga bledu
-			  }
-			  else {
-				  case frameLength:
-
-			  }
-
-		  }
-	  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
