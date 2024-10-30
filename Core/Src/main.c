@@ -33,13 +33,15 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+
 UART_HandleTypeDef huart2;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define UART_BUFFER_SIZE 750
-
+#define USART_TXBUF_SIZE 1024 // rozmiar bufora nadawczego usart
+#define USART_RXBUF_SIZE 128 // rozmiar bufora odbiorczego usart
 
 #define FRAME_START 0x3A
 #define FRAME_END 0x3B
@@ -59,38 +61,29 @@ UART_HandleTypeDef huart2;
 /* === FLAGS === */
 
 /* === UART Receive === */
-volatile uint8_t buf_RX[UART_BUFFER_SIZE];
-volatile uint16_t IDX_RX_EMPTY = 0;
-volatile uint16_t IDX_RX_BUSY = 0;
+volatile uint8_t USART_BUF_RX[USART_TXBUF_SIZE];
+volatile int USART_RX_EMPTY = 0;
+volatile int USART_RX_BUSY = 0;
 
 
 /* === UART Transmit === */
-volatile uint8_t buf_TX[UART_BUFFER_SIZE];
-volatile uint16_t IDX_TX_EMPTY = 0;
-volatile uint16_t IDX_TX_BUSY = 0;
-
-
-
-
-typedef struct {
-    uint8_t start;
-    char sender[2];
-    char receiver[2];
-    char length[3];
-    uint8_t data[128];
-    uint16_t crc;
-    uint8_t end;
-} UART_Frame;
-
-UART_Frame frame;
-
-int frameLength = 0;
+volatile uint8_t USART_BUF_TX[USART_TXBUF_SIZE];
+volatile int USART_TX_EMPTY = 0;
+volatile int USART_TX_BUSY = 0;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+
+void increase_usart_tx_busy();
+void increase_usart_tx_empty();
+void increase_usart_rx_busy();
+void increase_usart_rx_empty();
+
+int usart_tx_has_data();
+int usart_rx_has_data();
 
 /* USER CODE END PFP */
 
@@ -99,29 +92,29 @@ void SystemClock_Config(void);
 
 
 /* === INDEX INCREMENTING FUNCTIONS === */
-void increase_tx_busy() {
-    IDX_TX_BUSY = (IDX_TX_BUSY + 1) % UART_BUFFER_SIZE;
+void increase_usart_tx_busy() {
+    USART_TX_BUSY = (USART_TX_BUSY + 1) % USART_TXBUF_SIZE;
 }
 
-void increase_tx_empty() {
-    IDX_TX_EMPTY = (IDX_TX_EMPTY + 1) % UART_BUFFER_SIZE;
+void increase_usart_tx_empty() {
+    USART_TX_EMPTY = (USART_TX_EMPTY + 1) % USART_TXBUF_SIZE;
 }
 
-void increase_rx_busy() {
-    IDX_RX_BUSY = (IDX_RX_BUSY + 1) % UART_BUFFER_SIZE;
+void increase_usart_rx_busy() {
+	USART_RX_BUSY = (USART_RX_BUSY + 1) % USART_RXBUF_SIZE;
 }
 
-void increase_rx_empty() {
-    IDX_RX_EMPTY = (IDX_RX_EMPTY + 1) % UART_BUFFER_SIZE;
+void increase_usart_rx_empty() {
+    USART_RX_EMPTY = (USART_RX_EMPTY + 1) % USART_RXBUF_SIZE;
 }
 
 
 /* === BUFFER EMPTY CHECK FUNCTIONS === */
-int tx_has_data() {
+int usart_tx_has_data() {
     return IDX_TX_EMPTY != IDX_TX_BUSY;
 }
 
-int rx_has_data() {
+int usart_rx_has_data() {
     return IDX_RX_EMPTY != IDX_RX_BUSY;
 }
 
@@ -130,66 +123,45 @@ int rx_has_data() {
 /* === USART CALLBACK RECEIVE === */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart == &huart2) {
-		// Wyłączenie przerwań, aby uniknąć zakłóceń w trakcie ustawiania danych do wysłania
-		__disable_irq();
-
 		increase_rx_empty();
-
-		// Odbieranie
-		HAL_UART_Receive_IT(&huart2, &buf_RX[IDX_RX_EMPTY], 1);
-
-		// Włączenie przerwań
-		__enable_irq();
+		HAL_UART_Receive_IT(&huart2, &USART_BUF_RX[USART_RX_EMPTY], 1);
 	}
 }
 
 /* === USART TRANSMIT CALLBACK === */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart == &huart2) {
-        // Sprawdzenie, czy są kolejne dane do wysłania
+        // Sprawdzenie, czy są dane do wysłania
         if (tx_has_data()) {
-        	// Wyłączenie przerwań, aby uniknąć zakłóceń w trakcie ustawiania danych do wysłania
-        	__disable_irq();
-
-            HAL_UART_Transmit_IT(huart, (uint8_t *)&buf_TX[IDX_TX_BUSY], 1);
-            increase_tx_busy();
-
-            // Włączenie przerwań
-            __enable_irq();
+        	uint8_t tmp = USART_BUF_TX[USART_TX_BUSY];
+        	increase_usart_tx_busy();
+            HAL_UART_Transmit_IT(&huart2, &tmp, 1);
         }
     }
 }
 
 
-void send(char* msg) {
-
-	// Ustawienie wskaźnika na koniec bufora
-	uint16_t idx = IDX_TX_EMPTY;
-
-	// Kopiowanie danych do bufora
-	for (int i=0; i<strlen(msg); i++) {
-		buf_TX[idx] = msg[i];
-		idx = (idx + 1) % UART_BUFFER_SIZE;
+void send(char* format, ...) {
+	char tmp[256];
+	va_list arglist;
+	va_start(arglist, format);
+	vsprintf(tmp, format, arglist);
+	va_end(arglist);
+	volatile int idx = USART_TX_EMPTY;
+	for (int i = 0; i < strlen(tmp); i++) {
+		USART_BUF_TX[idx] = tmp[i];
+		idx = (idx + 1) % USART_TXBUF_SIZE;
 	}
 
-	IDX_TX_EMPTY = idx;
-
-	// Sprawdzenie, czy nadawanie jest gotowe i czy nie ma zaległych danych do wysłania
-	if (!tx_has_data() && (__HAL_UART_GET_FLAG(&huart2, UART_FLAG_TXE) == SET)) {
-
-		// Wyłączenie przerwań, aby uniknąć zakłóceń w trakcie ustawiania danych do wysłania
-		__disable_irq();
-
-		// Wysyłanie
-		HAL_UART_Transmit_IT(&huart2, (uint8_t *)&buf_TX[IDX_TX_BUSY], 1);
-		increase_tx_busy();
-
-		// Włączenie przerwań
-		__enable_irq();
+	__disable_irq();
+	USART_TX_EMPTY = idx;
+	if (!usart_tx_has_data() && __HAL_UART_GET_FLAG(&huart2, UART_FLAG_TXE) == SET) {
+		uint8_t tmp = USART_BUF_TX[USART_TX_BUSY];
+		increase_usart_tx_busy();
+		HAL_UART_Transmit_IT(&huart2, &tmp, 1);
 	}
+	__enable_irq();
 }
-
-
 
 /* USER CODE END 0 */
 
@@ -227,7 +199,7 @@ int main(void)
 
   /* USER CODE BEGIN 2 */
 
-  HAL_UART_Receive_IT(&huart2, &buf_RX[IDX_RX_EMPTY], 1);
+  HAL_UART_Receive_IT(&huart2, &USART_BUF_RX[USART_RX_EMPTY], 1);
 
   TIM2_Init();
   DHT11_GPIO_Init();
