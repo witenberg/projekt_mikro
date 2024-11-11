@@ -28,20 +28,23 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdarg.h>
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
-UART_HandleTypeDef huart2;
+//UART_HandleTypeDef huart2;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define USART_TXBUF_SIZE 1024 // rozmiar bufora nadawczego usart
-#define USART_RXBUF_SIZE 128 // rozmiar bufora odbiorczego usart
+#define USART_TXBUF_SIZE 1024 // rozmiar bufora nadawczego
+#define USART_RXBUF_SIZE 128 // rozmiar bufora odbiorczego
 
 #define FRAME_START 0x3A
 #define FRAME_END 0x3B
@@ -61,13 +64,13 @@ UART_HandleTypeDef huart2;
 /* === FLAGS === */
 
 /* === UART Receive === */
-volatile uint8_t USART_BUF_RX[USART_TXBUF_SIZE];
+uint8_t USART_BUF_RX[USART_TXBUF_SIZE];
 volatile int USART_RX_EMPTY = 0;
 volatile int USART_RX_BUSY = 0;
 
 
 /* === UART Transmit === */
-volatile uint8_t USART_BUF_TX[USART_TXBUF_SIZE];
+uint8_t USART_BUF_TX[USART_TXBUF_SIZE];
 volatile int USART_TX_EMPTY = 0;
 volatile int USART_TX_BUSY = 0;
 
@@ -85,10 +88,43 @@ void increase_usart_rx_empty();
 int usart_tx_has_data();
 int usart_rx_has_data();
 
+uint16_t calculate_crc(const char *data, size_t length);
+char* get_crc_hex(const char *input);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/* === CRC === */
+uint16_t calculate_crc(const char *data, size_t length) {
+	uint16_t crc = 0x0000; // początkowa wartość
+	uint16_t polynomial = 0xA001; // polinom (odwrócony 0x8005)
+
+	for (size_t i = 0; i < length; i++) {
+		crc ^= (uint8_t)data[i]; // XOR z bieżącym bajtem
+		for (uint8_t bit = 0; bit < 8; bit++) {
+			if (crc & 0x0001) crc = (crc >> 1) ^ polynomial;
+			else crc >>= 1;
+		}
+	}
+	return crc;
+}
+
+char* get_crc_hex(const char *input) {
+	char tmp[257]; // tymczasowa tablica
+	strncpy(tmp, input, 256);
+	tmp[256] = '\0';
+	size_t length = strnlen(tmp, 256);
+
+	uint16_t crc = calculate_crc(tmp, length); // obliczanie crc
+	char *crc_string = (char *)malloc(5);
+	if (!crc_string) return NULL;
+
+	snprintf(crc_string, 5, "%04X", crc); // formatowanie
+
+	return crc_string;
+}
 
 
 /* === INDEX INCREMENTING FUNCTIONS === */
@@ -111,11 +147,11 @@ void increase_usart_rx_empty() {
 
 /* === BUFFER EMPTY CHECK FUNCTIONS === */
 int usart_tx_has_data() {
-    return IDX_TX_EMPTY != IDX_TX_BUSY;
+    return USART_TX_EMPTY != USART_TX_BUSY;
 }
 
 int usart_rx_has_data() {
-    return IDX_RX_EMPTY != IDX_RX_BUSY;
+    return USART_RX_EMPTY != USART_RX_BUSY;
 }
 
 
@@ -123,7 +159,7 @@ int usart_rx_has_data() {
 /* === USART CALLBACK RECEIVE === */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart == &huart2) {
-		increase_rx_empty();
+		increase_usart_rx_empty();
 		HAL_UART_Receive_IT(&huart2, &USART_BUF_RX[USART_RX_EMPTY], 1);
 	}
 }
@@ -131,13 +167,45 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 /* === USART TRANSMIT CALLBACK === */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart == &huart2) {
-        // Sprawdzenie, czy są dane do wysłania
-        if (tx_has_data()) {
+        // sprawdzenie, czy są dane do wysłania
+        if (usart_tx_has_data()) {
         	uint8_t tmp = USART_BUF_TX[USART_TX_BUSY];
         	increase_usart_tx_busy();
-            HAL_UART_Transmit_IT(&huart2, &tmp, 1);
+            HAL_UART_Transmit_IT(&huart2, &tmp, 1); // bajt wysłany, można wysłać następny
         }
     }
+}
+
+int16_t USART_getchar(){
+	int16_t tmp;
+	if (usart_rx_has_data()) {
+		 tmp = USART_BUF_RX[USART_RX_BUSY];
+		 increase_usart_rx_busy();
+		 return tmp;
+	} else return -1;
+}
+
+uint8_t USART_getline(char *buf) {
+	static uint8_t bf[128];
+	static uint8_t idx=0;
+	int i;
+	uint8_t ret;
+	while(usart_rx_has_data()) {
+		bf[idx] = USART_getchar();
+		if (bf[idx] == 10 || bf[idx] == 13) { // znak \n lub \r
+			bf[idx] = 0;
+			for(i = 0; i <= idx; i++) {
+				buf[i]=bf[i]; // kopiowanie do bufora
+			}
+			ret = idx;
+			idx = 0;
+			return ret; // odebrano linie
+		} else {
+			idx++;
+			if (idx >= 128) idx=0; // powrót na początek bufora
+		}
+	}
+	return 0;
 }
 
 
@@ -201,8 +269,8 @@ int main(void)
 
   HAL_UART_Receive_IT(&huart2, &USART_BUF_RX[USART_RX_EMPTY], 1);
 
-  TIM2_Init();
-  DHT11_GPIO_Init();
+  //TIM2_Init();
+  //DHT11_GPIO_Init();
 
   /* USER CODE END 2 */
 

@@ -1,0 +1,16 @@
+../Core/Src/main.c:100:10:calculate_crc	4
+../Core/Src/main.c:114:7:get_crc_hex	2
+../Core/Src/main.c:131:6:increase_usart_tx_busy	1
+../Core/Src/main.c:135:6:increase_usart_tx_empty	1
+../Core/Src/main.c:139:6:increase_usart_rx_busy	1
+../Core/Src/main.c:143:6:increase_usart_rx_empty	1
+../Core/Src/main.c:149:5:usart_tx_has_data	1
+../Core/Src/main.c:153:5:usart_rx_has_data	1
+../Core/Src/main.c:160:6:HAL_UART_RxCpltCallback	2
+../Core/Src/main.c:168:6:HAL_UART_TxCpltCallback	3
+../Core/Src/main.c:179:9:USART_getchar	2
+../Core/Src/main.c:188:9:USART_getline	6
+../Core/Src/main.c:212:6:send	4
+../Core/Src/main.c:240:5:main	1
+../Core/Src/main.c:292:6:SystemClock_Config	3
+../Core/Src/main.c:334:6:Error_Handler	1
