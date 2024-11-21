@@ -49,6 +49,13 @@
 #define FRAME_START 0x3A
 #define FRAME_END 0x3B
 
+#define MASK 0x2F
+#define MASKED_START 0x2E
+#define MASKED_END 0x2C
+
+#define SENDER "PC"
+#define RECEIVER "MC"
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -61,18 +68,56 @@
 /* USER CODE BEGIN PV */
 
 
-/* === FLAGS === */
-
 /* === UART Receive === */
 uint8_t USART_BUF_RX[USART_TXBUF_SIZE];
-volatile int USART_RX_EMPTY = 0;
-volatile int USART_RX_BUSY = 0;
+volatile uint16_t USART_RX_EMPTY = 0;
+volatile uint16_t USART_RX_BUSY = 0;
 
 
 /* === UART Transmit === */
 uint8_t USART_BUF_TX[USART_TXBUF_SIZE];
-volatile int USART_TX_EMPTY = 0;
-volatile int USART_TX_BUSY = 0;
+volatile uint16_t USART_TX_EMPTY = 0;
+volatile uint16_t USART_TX_BUSY = 0;
+
+/* Flagi */
+volatile uint8_t is_handling = 0; // flaga sprawdzająca, czy jest aktualnie obsługiwany jakiś znak
+
+
+/* Stany */
+typedef enum {
+	FIND_START,
+	FIND_SENDER,
+	FIND_RECEIVER,
+	FIND_LENGTH,
+	FIND_DATA,
+	FIND_CRC,
+	FIND_END,
+	FIND_MASKED,
+	FRAME_ERROR
+} FrameState;
+
+/* Struktura ramki */
+typedef struct {
+	uint8_t sender[3];
+	uint8_t receiver[3];
+	uint8_t length[4];
+	uint8_t data[257];
+	uint16_t crc;
+
+	uint8_t sender_id;
+	uint8_t receiver_id;
+	uint8_t length_id;
+	uint8_t data_id;
+	uint8_t crc_id;
+
+	uint16_t length_int;
+	uint16_t masked_counter;
+	FrameState state;
+	bool complete;
+} Frame;
+
+/* Inicjalizacja */
+Frame frame;
 
 /* USER CODE END PV */
 
@@ -85,8 +130,8 @@ void increase_usart_tx_empty();
 void increase_usart_rx_busy();
 void increase_usart_rx_empty();
 
-int usart_tx_has_data();
-int usart_rx_has_data();
+uint8_t usart_tx_has_data();
+uint8_t usart_rx_has_data();
 
 uint16_t calculate_crc(const char *data, size_t length);
 char* get_crc_hex(const char *input);
@@ -109,6 +154,24 @@ uint16_t calculate_crc(const char *data, size_t length) {
 		}
 	}
 	return crc;
+}
+
+uint16_t calculate_frame_crc(Frame *frame) {
+    uint16_t crc = 0x0000; // Początkowa wartość CRC
+
+    // Oblicz CRC dla pola receiver
+    crc = calculate_crc((const char *)frame->receiver, sizeof(frame->receiver)) ^ crc;
+
+    // Oblicz CRC dla pola sender
+    crc = calculate_crc((const char *)frame->sender, sizeof(frame->sender));
+
+    // Oblicz CRC dla pola length
+    crc = calculate_crc((const char *)frame->length, sizeof(frame->length)) ^ crc;
+
+    // Oblicz CRC dla pola data
+    crc = calculate_crc((const char *)frame->data, sizeof(frame->data)) ^ crc;
+
+    return crc;
 }
 
 char* get_crc_hex(const char *input) {
@@ -146,11 +209,11 @@ void increase_usart_rx_empty() {
 
 
 /* === BUFFER EMPTY CHECK FUNCTIONS === */
-int usart_tx_has_data() {
+uint8_t usart_tx_has_data() {
     return USART_TX_EMPTY != USART_TX_BUSY;
 }
 
-int usart_rx_has_data() {
+uint8_t usart_rx_has_data() {
     return USART_RX_EMPTY != USART_RX_BUSY;
 }
 
@@ -183,6 +246,7 @@ int16_t USART_getchar(){
 		 increase_usart_rx_busy();
 		 return tmp;
 	} else return -1;
+
 }
 
 uint8_t USART_getline(char *buf) {
@@ -231,6 +295,297 @@ void send(char* format, ...) {
 	__enable_irq();
 }
 
+uint16_t validate_and_atoi(const char *str, size_t length) {
+    uint16_t result = 0;
+
+    // sprawdzanie czy kazdy znak to cyfra
+    for (size_t i = 0; i < length; i++) {
+        if (str[i] < '0' || str[i] > '9') {
+            printf("invalid char '%c' during atoi\n", str[i]);
+            return 65535; // maksymalna wartosc uint16 jako kod bledu
+        }
+        result = (result * 10) + (str[i] - '0');
+    }
+
+    return result;
+}
+
+void process_frame() {
+
+	if (frame.crc != calculate_frame_crc(&frame)) return;
+
+	//uint16_t length = (atoi(frame.length[0]) * 100) + (atoi(frame.length[1] * 10)) + atoi(frame.length[3]);
+
+	char length_str[4] = {frame.length[0], frame.length[1], frame.length[3], '\0'};
+	uint16_t length = atoi(length_str);
+
+	if (length < 5 || length > 256) {
+		printf("wrong length");
+		//err01();
+		return;
+	}
+
+	length -= frame.masked_counter; // dla odkodowanej ramki dlugosc musi byc pomniejszona o ilosc zamaskowanych znakow
+
+
+	if (strncmp((char *)frame.data, "READ", 4) == 0) {
+		if (length != 7) {
+			printf("wrong parameter");
+			//err03();
+			return;
+		}
+
+		char parameter_str[4] = {frame.data[4], frame.data[5], frame.data[6]};
+		uint16_t parameter = validate_and_atoi(parameter_str, 3);
+
+		if (parameter < 1 || parameter > 750) {
+			printf("wrong parameter");
+			//err03();
+			return;
+		}
+//		else if (parameter < dht_data_counter) {
+//			printf ("not enough data in buffer");
+//			err04();
+//			return;
+//		}
+//		else {
+//			read(length);
+//			return;
+//		}
+	}
+	else if (strncmp((char *)frame.data, "COUNT_DATA", 10) == 0) {
+		if (*frame.length != 10) {
+			printf("wrong command");
+			//err02();
+			return;
+		}
+//		else {
+//			count_data();
+//			return;
+//		}
+	}
+
+	else if (strncmp((char *)frame.data, "SET_INTERVAL", 12) == 0) {
+		if (*frame.length != 17) {
+			printf("wrong command");
+			//err02();
+			return;
+		}
+
+		char parameter_str[6] = { frame.data[12], frame.data[13], frame.data[14], frame.data[15], frame.data[16], '\0' };
+		uint16_t parameter = validate_and_atoi(parameter_str, 5);
+
+		if (parameter < 2000 || parameter > 20000) {
+			printf("wrong parameter");
+			//err03();
+			return;
+		}
+//		else {
+//			set_interval(parameter);
+//			return;
+//		}
+	}
+
+	else if (strncmp((char *)frame.data, "GET_INTERVAL", 12) == 0) {
+		if (*frame.length != 12) {
+			printf("wrong command");
+			//err02();
+			return;
+		}
+//		else {
+//			get_interval();
+//			return
+//		}
+	}
+}
+
+void reset_frame() {
+	memset(&frame, 0, sizeof(Frame));
+	frame.state = FIND_START;
+}
+
+void get_frame(char ch) {
+	switch (frame.state) {
+
+	case FIND_START: {
+		if (ch == FRAME_START) {
+			reset_frame();
+			frame.state = FIND_SENDER;
+			return;
+		}
+	}
+
+	case FIND_SENDER: {
+		if (ch >= 'A' && ch <= 'Z') {
+			frame.sender[frame.sender_id] = ch;
+			if (frame.sender_id == 1) {
+				frame.sender[2] = '\0';
+				if (strncmp((char*)frame.sender, SENDER, 2) == 0){
+					frame.state = FIND_RECEIVER;
+					return;
+				}
+				else frame.state = FRAME_ERROR;
+			}
+			else frame.sender_id++;
+		}
+		else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
+		else frame.state = FRAME_ERROR;
+	}
+
+	case FIND_RECEIVER: {
+		if (ch >= 'A' && ch <= 'Z') {
+			frame.receiver[frame.receiver_id] = ch;
+			if (frame.receiver_id == 1) {
+				frame.receiver[2] = '\0';
+				if (strncmp((char*)frame.receiver, RECEIVER, 2) == 0) {
+					frame.state = FIND_LENGTH;
+					return;
+				}
+				else frame.state = FRAME_ERROR;
+			}
+			else frame.receiver_id++;
+		}
+		else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
+		else frame.state = FRAME_ERROR;
+	}
+
+	case FIND_LENGTH: {
+		if (ch >= '0' && ch <= '9') {
+			frame.length[frame.length_id] = ch;
+			if (frame.length_id == 2) {
+				frame.length[3] = '\0';
+				frame.length_int = atoi((char*)frame.length);
+				frame.state = FIND_DATA;
+				return;
+			}
+			else frame.length_id++;
+		}
+		else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
+		else frame.state = FRAME_ERROR;
+	}
+
+	case FIND_DATA: {
+		if (frame.data_id < frame.length_int) {
+			if (ch == MASK) {
+				frame.state = FIND_MASKED;
+				frame.data_id++;
+				return;
+			}
+			else if (ch == FRAME_START || ch == FRAME_END) {
+				frame.state = FIND_START;
+				return;
+			}
+			else {
+				frame.data[frame.data_id] = ch;
+				frame.data_id++;
+			}
+		}
+		else {
+			frame.data[frame.data_id] = '\0';
+			frame.state = FIND_CRC;
+			return;
+		}
+	}
+
+	case FIND_MASKED: {
+		frame.masked_counter++;
+		switch(ch) {
+		case MASKED_START: {
+			frame.data[frame.data_id] = ':';
+			frame.data_id++;
+			frame.state = FIND_DATA;
+			break;
+		}
+		case MASKED_END: {
+			frame.data[frame.data_id] = ';';
+			frame.data_id++;
+			frame.state = FIND_DATA;
+			break;
+		}
+		case MASK: {
+			frame.data[frame.data_id] = '/';
+			frame.data_id++;
+			frame.state = FIND_DATA;
+			break;
+		}
+		default: {
+			frame.state = FRAME_ERROR;
+			break;
+		}
+		}
+		if (frame.data_id < frame.length_int) {
+			frame.state = FIND_DATA;
+		} else {
+			frame.data[frame.data_id] = '\0';
+			frame.state = FIND_CRC;
+		}
+	}
+
+	case FIND_CRC: {
+		if ((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F')) {
+			uint8_t value;
+			if (ch >= '0' && ch <= '9') value = ch - '0';
+			else value = ch - 'A' + 10;
+
+			switch(frame.crc_id) {
+			case 0: {
+				frame.crc = value << 12;
+				break;
+			}
+			case 1: {
+				frame.crc |= value << 8;
+				break;
+			}
+			case 2: {
+				frame.crc |= value << 4;
+				break;
+			}
+			case 3: {
+				frame.crc |= value;
+				frame.state = FIND_END;
+				return;
+			}
+			}
+			frame.crc_id++;
+		}
+		else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
+		else frame.state = FRAME_ERROR;
+	}
+
+	case FIND_END: {
+		if (ch == FRAME_END) {
+			frame.complete = true;
+			process_frame();
+			return;
+		}
+		else if (ch == FRAME_START) frame.state = FIND_START;
+		else frame.state = FRAME_ERROR;
+	}
+
+	case FRAME_ERROR: {
+		printf("error during frame processing");
+		frame.state = FIND_START;
+	}
+
+	}
+}
+
+void handle_char() {
+	//__disable_irq();
+	is_handling = 1;
+	//__enable_irq();
+
+	char ch;
+	if ((ch = USART_getchar()) >= 0) {
+		get_frame(ch);
+	}
+
+	//__disable_irq();
+	is_handling = 0;
+	//__enable_irq();
+}
+
+
 /* USER CODE END 0 */
 
 /**
@@ -278,6 +633,11 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  if (usart_rx_has_data() && !is_handling) {
+		  handle_char();
+	  }
+
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
