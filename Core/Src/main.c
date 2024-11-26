@@ -100,6 +100,7 @@ typedef struct {
 	uint8_t sender[3];
 	uint8_t receiver[3];
 	uint8_t length[4];
+	uint8_t data_raw[257];
 	uint8_t data[257];
 	uint16_t crc;
 
@@ -107,6 +108,7 @@ typedef struct {
 	uint8_t receiver_id;
 	uint8_t length_id;
 	uint16_t data_id;
+	uint16_t data_raw_id;
 	uint8_t crc_id;
 
 	uint16_t length_int;
@@ -157,7 +159,7 @@ uint16_t calculate_frame_crc(Frame *frame) {
     crc = calculate_crc((const char *)frame->length, sizeof(frame->length)) ^ crc;
 
     // Oblicz CRC dla pola data
-    crc = calculate_crc((const char *)frame->data, sizeof(frame->data)) ^ crc;
+    crc = calculate_crc((const char *)frame->data_raw, sizeof(frame->data_raw)) ^ crc;
 
     return crc;
 }
@@ -420,8 +422,8 @@ void get_frame(uint8_t ch) {
 			frame.sender[frame.sender_id] = ch;
 			if (frame.sender_id == 1) {
 				frame.sender[2] = '\0';
-				if (frame.sender[0] == 'P' && frame.sender[1] == 'C'){
-					USART_fsend("sender git");
+				if (strncmp((char *)frame.sender, SENDER, 2) == 0){
+//					USART_fsend("sender ok");
 					frame.state = FIND_RECEIVER;
 					return;
 				}
@@ -440,7 +442,7 @@ void get_frame(uint8_t ch) {
 			if (frame.receiver_id == 1) {
 				frame.receiver[2] = '\0';
 				if (strncmp((char *)frame.receiver, RECEIVER, 2) == 0) {
-					USART_fsend("receiver git");
+//					USART_fsend("receiver ok");
 					frame.state = FIND_LENGTH;
 					return;
 				}
@@ -470,11 +472,12 @@ void get_frame(uint8_t ch) {
 	}
 
 	case FIND_DATA: {
+		frame.data_raw[frame.data_raw_id++] = ch;
+
 		if (frame.data_id < frame.length_int) {
 			if (ch == MASK) {
 				if (frame.data_id < frame.length_int - 1) {
 					frame.state = FIND_MASKED;
-					frame.data_id++;
 					return;
 				}
 				else {	// jeśli znak maskujący jest ostatnim w danych, wtedy błąd
@@ -492,6 +495,7 @@ void get_frame(uint8_t ch) {
 			}
 		}
 		else {
+			frame.data_raw[frame.data_raw_id] = '\0';
 			frame.data[frame.data_id] = '\0';
 			frame.state = FIND_CRC;
 			return;
@@ -500,20 +504,18 @@ void get_frame(uint8_t ch) {
 
 	case FIND_MASKED: {
 		frame.masked_counter++;
+		frame.data_raw[frame.data_raw_id++] = ch;
 		switch(ch) {
 		case MASKED_START: {
-			frame.data[frame.data_id] = ':';
-			frame.data_id++;
+			frame.data[frame.data_id++] = ':';
 			frame.state = FIND_DATA;
 		}
 		case MASKED_END: {
-			frame.data[frame.data_id] = ';';
-			frame.data_id++;
+			frame.data[frame.data_id++] = ';';
 			frame.state = FIND_DATA;
 		}
 		case MASK: {
-			frame.data[frame.data_id] = '/';
-			frame.data_id++;
+			frame.data[frame.data_id++] = '/';
 			frame.state = FIND_DATA;
 		}
 		default: {
@@ -525,6 +527,7 @@ void get_frame(uint8_t ch) {
 			frame.state = FIND_DATA;
 			return;
 		} else {
+			frame.data_raw[frame.data_raw_id] = '\0';
 			frame.data[frame.data_id] = '\0';
 			frame.state = FIND_CRC;
 			return;
