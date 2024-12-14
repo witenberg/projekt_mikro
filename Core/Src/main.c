@@ -79,7 +79,7 @@ volatile uint16_t USART_TX_EMPTY = 0;
 volatile uint16_t USART_TX_BUSY = 0;
 
 /* Flagi */
-volatile uint8_t is_handling = 0; // flaga sprawdzająca, czy jest aktualnie obsługiwany jakiś znak
+//volatile uint8_t is_handling = 0; // flaga sprawdzająca, czy jest aktualnie obsługiwany jakiś znak
 
 
 /* Stany */
@@ -179,34 +179,6 @@ char* get_crc_hex(const char *input) {
 	return crc_string;
 }
 
-
-/* === INDEX INCREMENTING FUNCTIONS === */
-void increase_usart_tx_busy() {
-    USART_TX_BUSY = (USART_TX_BUSY + 1) % USART_TXBUF_SIZE;
-}
-
-void increase_usart_tx_empty() {
-    USART_TX_EMPTY = (USART_TX_EMPTY + 1) % USART_TXBUF_SIZE;
-}
-
-void increase_usart_rx_busy() {
-	USART_RX_BUSY = (USART_RX_BUSY + 1) % USART_RXBUF_SIZE;
-}
-
-void increase_usart_rx_empty() {
-    USART_RX_EMPTY = (USART_RX_EMPTY + 1) % USART_RXBUF_SIZE;
-}
-
-
-/* === BUFFER EMPTY CHECK FUNCTIONS === */
-uint8_t usart_tx_has_data() {
-    return USART_TX_EMPTY != USART_TX_BUSY;
-}
-
-uint8_t usart_rx_has_data() {
-    return USART_RX_EMPTY != USART_RX_BUSY;
-}
-
 uint8_t USART_kbhit(){
 	if (USART_RX_EMPTY == USART_RX_BUSY){
 		return 0;
@@ -272,31 +244,6 @@ int16_t USART_getchar(){
 
 }
 
-uint8_t USART_getline(char *buf) {
-	static uint8_t bf[128];
-	static uint8_t idx=0;
-	int i;
-	uint8_t ret;
-	while(usart_rx_has_data()) {
-		bf[idx] = USART_getchar();
-		if (bf[idx] == 10 || bf[idx] == 13) { // znak \n lub \r
-			bf[idx] = 0;
-			for(i = 0; i <= idx; i++) {
-				buf[i]=bf[i]; // kopiowanie do bufora
-			}
-			ret = idx;
-			idx = 0;
-			return ret; // odebrano linie
-		} else {
-			idx++;
-			if (idx >= 128) idx=0; // powrót na początek bufora
-		}
-	}
-	return 0;
-}
-
-
-
 uint16_t validate_and_atoi(const char *str, size_t length) {
     uint16_t result = 0;
 
@@ -322,7 +269,7 @@ void process_frame() {
 	uint16_t length = atoi(length_str);
 
 	if (length < 5 || length > 256) {
-		USART_fsend("wrong length");
+		//USART_fsend("wrong length");
 		//err01();
 		return;
 	}
@@ -332,7 +279,7 @@ void process_frame() {
 
 	if (strncmp((char *)frame.data, "READ", 4) == 0) {
 		if (length != 7) {
-			USART_fsend("wrong parameter");
+			//USART_fsend("wrong parameter");
 			//err03();
 			return;
 		}
@@ -341,7 +288,6 @@ void process_frame() {
 		uint16_t parameter = validate_and_atoi(parameter_str, 3);
 
 		if (parameter < 1 || parameter > 750) {
-			printf("wrong parameter");
 			//err03();
 			return;
 		}
@@ -357,7 +303,7 @@ void process_frame() {
 	}
 	else if (strncmp((char *)frame.data, "COUNT_DATA", 10) == 0) {
 		if (frame.length_int != 10) {
-			USART_fsend("wrong command");
+			//USART_fsend("wrong command");
 			//err02();
 			return;
 		}
@@ -369,7 +315,7 @@ void process_frame() {
 
 	else if (strncmp((char *)frame.data, "SET_INTERVAL", 12) == 0) {
 		if (frame.length_int != 17) {
-			USART_fsend("wrong command");
+			//USART_fsend("wrong command");
 			//err02();
 			return;
 		}
@@ -378,7 +324,7 @@ void process_frame() {
 		uint16_t parameter = validate_and_atoi(parameter_str, 5);
 
 		if (parameter < 2000 || parameter > 20000) {
-			USART_fsend("wrong parameter");
+			//USART_fsend("wrong parameter");
 			//err03();
 			return;
 		}
@@ -390,7 +336,7 @@ void process_frame() {
 
 	else if (strncmp((char *)frame.data, "GET_INTERVAL", 12) == 0) {
 		if (frame.length_int != 12) {
-			USART_fsend("wrong command");
+			//USART_fsend("wrong command");
 			//err02();
 			return;
 		}
@@ -407,8 +353,13 @@ void reset_frame() {
 }
 
 void get_frame(uint8_t ch) {
-	switch (frame.state) {
 
+	if (ch == '\0') {
+		frame.state = FIND_START;
+		return;
+	}
+
+	switch (frame.state) {
 	case FIND_START: {
 		if (ch == FRAME_START) {
 			reset_frame();
@@ -432,7 +383,7 @@ void get_frame(uint8_t ch) {
 			else frame.sender_id++;
 		}
 		else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FRAME_ERROR;
+		else frame.state = FRAME_START;
 		break;
 	}
 
@@ -450,8 +401,8 @@ void get_frame(uint8_t ch) {
 			}
 			else frame.receiver_id++;
 		}
-		else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FRAME_ERROR;
+		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
+		else frame.state = FRAME_START;
 		break;
 	}
 
@@ -466,8 +417,8 @@ void get_frame(uint8_t ch) {
 			}
 			else frame.length_id++;
 		}
-		else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FRAME_ERROR;
+		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
+		else frame.state = FRAME_START;
 		break;
 	}
 
@@ -489,8 +440,7 @@ void get_frame(uint8_t ch) {
 				return;
 			}
 			else {
-				frame.data[frame.data_id] = ch;
-				frame.data_id++;
+				frame.data[frame.data_id++] = ch;
 				break;
 			}
 		}
@@ -507,19 +457,22 @@ void get_frame(uint8_t ch) {
 		frame.data_raw[frame.data_raw_id++] = ch;
 		switch(ch) {
 		case MASKED_START: {
-			frame.data[frame.data_id++] = ':';
+			frame.data[frame.data_id - frame.masked_counter] = FRAME_START;
+			frame.data_id++;
 			frame.state = FIND_DATA;
 		}
 		case MASKED_END: {
-			frame.data[frame.data_id++] = ';';
+			frame.data[frame.data_id - frame.masked_counter] = FRAME_END;
+			frame.data_id++;
 			frame.state = FIND_DATA;
 		}
 		case MASK: {
-			frame.data[frame.data_id++] = '/';
+			frame.data[frame.data_id - frame.masked_counter] = MASK;
+			frame.data_id++;
 			frame.state = FIND_DATA;
 		}
-		default: {
-			frame.state = FRAME_ERROR;
+		default: { // błąd, powrót do początku
+			frame.state = FIND_START;
 			return;
 		}
 		}
@@ -588,21 +541,17 @@ void get_frame(uint8_t ch) {
 }
 
 void handle_char() {
-	//__disable_irq();
-	is_handling = 1;
-	//__enable_irq();
+
+//	is_handling = 1;
 
 	int16_t ch;
-	if ((ch = USART_getchar()) >= 0 && ch < 128) {
-		USART_fsend("  |%c|  ", ch);
+	if ((ch = USART_getchar()) >= 0 && ch <= 255) {
+		//USART_fsend("  |%c|  ", ch);
 		get_frame((uint8_t)ch);
 	}
 
-	//__disable_irq();
-	is_handling = 0;
-	//__enable_irq();
+//	is_handling = 0;
 }
-
 
 /* USER CODE END 0 */
 
@@ -649,7 +598,8 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  if (USART_RX_EMPTY != USART_RX_BUSY && !is_handling) {
+	  // jeśli bufor nie jest pusty
+	  if (USART_RX_EMPTY != USART_RX_BUSY) {
 		  handle_char();
 	  }
 
