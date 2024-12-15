@@ -91,8 +91,7 @@ typedef enum {
 	FIND_DATA,
 	FIND_CRC,
 	FIND_END,
-	FIND_MASKED,
-	FRAME_ERROR
+	FIND_MASKED
 } FrameState;
 
 /* Struktura ramki */
@@ -100,15 +99,14 @@ typedef struct {
 	uint8_t sender[3];
 	uint8_t receiver[3];
 	uint8_t length[4];
-	uint8_t data_raw[257];
 	uint8_t data[257];
-	uint16_t crc;
+	uint8_t crc_frame[5];
 
+	uint16_t crc_calculated;
 	uint8_t sender_id;
 	uint8_t receiver_id;
 	uint8_t length_id;
 	uint16_t data_id;
-	uint16_t data_raw_id;
 	uint8_t crc_id;
 
 	uint16_t length_int;
@@ -132,52 +130,30 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN 0 */
 
 /* === CRC === */
-uint16_t calculate_crc(const char *data, size_t length) {
-	uint16_t crc = 0x0000; // początkowa wartość
-	uint16_t polynomial = 0xA001; // polinom (odwrócony 0x8005)
+//uint16_t calculate_crc(const char *data, size_t length) {
+//	uint16_t crc = 0x0000; // początkowa wartość
+//	uint16_t polynomial = 0xA001; // polinom (odwrócony 0x8005)
+//
+//	for (size_t i = 0; i < length; i++) {
+//		crc ^= (uint8_t)data[i]; // XOR z bieżącym bajtem
+//		for (uint8_t bit = 0; bit < 8; bit++) {
+//			if (crc & 0x0001) crc = (crc >> 1) ^ polynomial;
+//			else crc >>= 1;
+//		}
+//	}
+//	return crc;
+//}
 
-	for (size_t i = 0; i < length; i++) {
-		crc ^= (uint8_t)data[i]; // XOR z bieżącym bajtem
-		for (uint8_t bit = 0; bit < 8; bit++) {
-			if (crc & 0x0001) crc = (crc >> 1) ^ polynomial;
-			else crc >>= 1;
-		}
+uint16_t calculate_crc_byte(uint16_t crc, uint8_t data) {
+	crc ^= (data << 8);
+	for (uint8_t i = 0; i < 8; i++) {
+		if (crc & 0x8000) crc = (crc << 1) ^ 0x1021;
+		else crc <<= 1;
 	}
 	return crc;
 }
 
-uint16_t calculate_frame_crc(Frame *frame) {
-    uint16_t crc = 0x0000; // Początkowa wartość CRC
 
-    // Oblicz CRC dla pola receiver
-    crc = calculate_crc((const char *)frame->receiver, sizeof(frame->receiver)) ^ crc;
-
-    // Oblicz CRC dla pola sender
-    crc = calculate_crc((const char *)frame->sender, sizeof(frame->sender)) ^ crc;
-
-    // Oblicz CRC dla pola length
-    crc = calculate_crc((const char *)frame->length, sizeof(frame->length)) ^ crc;
-
-    // Oblicz CRC dla pola data
-    crc = calculate_crc((const char *)frame->data_raw, sizeof(frame->data_raw)) ^ crc;
-
-    return crc;
-}
-
-char* get_crc_hex(const char *input) {
-	char tmp[257]; // tymczasowa tablica
-	strncpy(tmp, input, 256);
-	tmp[257] = '\0';
-	size_t length = strnlen(tmp, 256);
-
-	uint16_t crc = calculate_crc(tmp, length); // obliczanie crc
-	char *crc_string = (char *)malloc(5);
-	if (!crc_string) return NULL;
-
-	snprintf(crc_string, 5, "%04X", crc); // formatowanie
-
-	return crc_string;
-}
 
 uint8_t USART_kbhit(){
 	if (USART_RX_EMPTY == USART_RX_BUSY){
@@ -260,8 +236,6 @@ uint16_t validate_and_atoi(const char *str, size_t length) {
 }
 
 void process_frame() {
-
-	if (frame.crc != calculate_frame_crc(&frame)) return;
 
 	//uint16_t length = (atoi(frame.length[0]) * 100) + (atoi(frame.length[1] * 10)) + atoi(frame.length[3]);
 
@@ -350,6 +324,7 @@ void process_frame() {
 void reset_frame() {
 	memset(&frame, 0, sizeof(Frame));
 	frame.state = FIND_START;
+	frame.crc_calculated = 0xFFFF;
 }
 
 void get_frame(uint8_t ch) {
@@ -378,13 +353,16 @@ void get_frame(uint8_t ch) {
 					frame.state = FIND_RECEIVER;
 					return;
 				}
-				else frame.state = FRAME_ERROR;
+				else {
+					frame.state = FIND_START;
+					return;
+				}
 			}
 			else frame.sender_id++;
 		}
-		else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FRAME_START;
-		break;
+		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
+		else frame.state = FIND_START;
+		return;
 	}
 
 	case FIND_RECEIVER: {
@@ -397,13 +375,16 @@ void get_frame(uint8_t ch) {
 					frame.state = FIND_LENGTH;
 					return;
 				}
-				else frame.state = FRAME_ERROR;
+				else {
+					frame.state = FIND_START;
+					return;
+				}
 			}
 			else frame.receiver_id++;
 		}
 		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
 		else frame.state = FRAME_START;
-		break;
+		return;
 	}
 
 	case FIND_LENGTH: {
@@ -423,29 +404,27 @@ void get_frame(uint8_t ch) {
 	}
 
 	case FIND_DATA: {
-		frame.data_raw[frame.data_raw_id++] = ch;
 
-		if (frame.data_id < frame.length_int) {
-			if (ch == MASK) {
-				if (frame.data_id < frame.length_int - 1) {
-					frame.state = FIND_MASKED;
-					return;
-				}
-				else {	// jeśli znak maskujący jest ostatnim w danych, wtedy błąd
-					frame.state = FRAME_ERROR;
-				}
-			}
-			else if (ch == FRAME_START || ch == FRAME_END) {
+		if (frame.data_id + frame.masked_counter < frame.length_int) {
+
+			if (ch == FRAME_START || ch == FRAME_END) {
 				frame.state = FIND_START;
 				return;
 			}
-			else {
-				frame.data[frame.data_id++] = ch;
-				break;
+
+			frame.crc_calculated = calculate_crc_byte(frame.crc_calculated, ch);
+
+			if (ch == MASK) {
+				frame.masked_counter++;
+				frame.state = FIND_MASKED;
+				return;
 			}
+
+			frame.data[frame.data_id++] = ch;
+			return;
+
 		}
 		else {
-			frame.data_raw[frame.data_raw_id] = '\0';
 			frame.data[frame.data_id] = '\0';
 			frame.state = FIND_CRC;
 			return;
@@ -453,71 +432,64 @@ void get_frame(uint8_t ch) {
 	}
 
 	case FIND_MASKED: {
-		frame.masked_counter++;
-		frame.data_raw[frame.data_raw_id++] = ch;
+
+		if (frame.data_id + frame.masked_counter >= frame.length_int) {
+			frame.state = FIND_START;
+			return;
+		}
+
 		switch(ch) {
 		case MASKED_START: {
-			frame.data[frame.data_id - frame.masked_counter] = FRAME_START;
-			frame.data_id++;
+			frame.data[frame.data_id++] = FRAME_START;
 			frame.state = FIND_DATA;
+			break;
 		}
 		case MASKED_END: {
-			frame.data[frame.data_id - frame.masked_counter] = FRAME_END;
-			frame.data_id++;
+			frame.data[frame.data_id++] = FRAME_END;
 			frame.state = FIND_DATA;
+			break;
 		}
 		case MASK: {
-			frame.data[frame.data_id - frame.masked_counter] = MASK;
-			frame.data_id++;
+			frame.data[frame.data_id++] = MASK;
 			frame.state = FIND_DATA;
+			break;
 		}
 		default: { // błąd, powrót do początku
 			frame.state = FIND_START;
 			return;
 		}
 		}
-		if (frame.data_id < frame.length_int) {
+
+		frame.crc_calculated = calculate_crc_byte(frame.crc_calculated, ch);
+
+		if (frame.data_id < frame.length_int - 1) {
 			frame.state = FIND_DATA;
-			return;
 		} else {
-			frame.data_raw[frame.data_raw_id] = '\0';
 			frame.data[frame.data_id] = '\0';
 			frame.state = FIND_CRC;
-			return;
 		}
+
+		return;
 	}
 
 	case FIND_CRC: {
 		if ((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F')) {
-			uint8_t value;
-			if (ch >= '0' && ch <= '9') value = ch - '0';
-			else value = ch - 'A' + 10;
-
-			switch(frame.crc_id) {
-			case 0: {
-				frame.crc = value << 12;
-				break;
+			frame.crc_frame[frame.crc_id++] = ch;
+			if (frame.crc_id == 4) {
+				frame.crc_frame[4] = '\0';
+				if ((uint16_t)strtol((char *)frame.crc_frame, NULL, 16) == frame.crc_calculated) {
+					frame.state = FIND_END;
+					return;
+				}
+				else {
+					frame.state = FIND_START;
+					return;
+				}
 			}
-			case 1: {
-				frame.crc |= value << 8;
-				break;
-			}
-			case 2: {
-				frame.crc |= value << 4;
-				break;
-			}
-			case 3: {
-				frame.crc |= value;
-				frame.state = FIND_END;
-				return;
-			}
-			}
-			frame.crc_id++;
-			break;
 		}
 		else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FRAME_ERROR;
-		break;
+		else frame.state = FIND_START;
+		return;
 	}
 
 	case FIND_END: {
@@ -527,16 +499,9 @@ void get_frame(uint8_t ch) {
 			return;
 		}
 		else if (ch == FRAME_START) frame.state = FIND_START;
-		else frame.state = FRAME_ERROR;
-		break;
-	}
-
-	case FRAME_ERROR: {
-//		USART_fsend("error during frame processing");
-		frame.state = FIND_START;
+		else frame.state = FIND_START;
 		return;
 	}
-
 	}
 }
 
