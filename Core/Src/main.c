@@ -226,8 +226,8 @@ uint16_t validate_and_atoi(const char *str, size_t length) {
     // sprawdzanie czy kazdy znak to cyfra
     for (size_t i = 0; i < length; i++) {
         if (str[i] < '0' || str[i] > '9') {
-            USART_fsend("invalid char '%c' during atoi\n", str[i]);
-            return 65535; // maksymalna wartosc uint16 jako kod bledu
+            //USART_fsend("invalid char '%c' during atoi\n", str[i]);
+            return 0; // kod bledu
         }
         result = (result * 10) + (str[i] - '0');
     }
@@ -237,18 +237,13 @@ uint16_t validate_and_atoi(const char *str, size_t length) {
 
 void process_frame() {
 
-	//uint16_t length = (atoi(frame.length[0]) * 100) + (atoi(frame.length[1] * 10)) + atoi(frame.length[3]);
 
-	char length_str[4] = {frame.length[0], frame.length[1], frame.length[3], '\0'};
-	uint16_t length = atoi(length_str);
-
-	if (length < 5 || length > 256) {
-		//USART_fsend("wrong length");
+	if (frame.length < 5 || frame.length > 256) {
 		//err01();
 		return;
 	}
 
-	length -= frame.masked_counter; // dla odkodowanej ramki dlugosc musi byc pomniejszona o ilosc zamaskowanych znakow
+	uint8_t length = frame.length_int - frame.masked_counter; // dla odkodowanej ramki dlugosc musi byc pomniejszona o ilosc zamaskowanych znakow
 
 
 	if (strncmp((char *)frame.data, "READ", 4) == 0) {
@@ -400,7 +395,7 @@ void get_frame(uint8_t ch) {
 		}
 		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
 		else frame.state = FRAME_START;
-		break;
+		return;
 	}
 
 	case FIND_DATA: {
