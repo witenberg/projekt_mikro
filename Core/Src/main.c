@@ -115,7 +115,6 @@ typedef struct {
 	bool complete;
 } Frame;
 
-/* Inicjalizacja */
 Frame frame;
 
 /* USER CODE END PV */
@@ -130,20 +129,6 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN 0 */
 
 /* === CRC === */
-//uint16_t calculate_crc(const char *data, size_t length) {
-//	uint16_t crc = 0x0000; // początkowa wartość
-//	uint16_t polynomial = 0xA001; // polinom (odwrócony 0x8005)
-//
-//	for (size_t i = 0; i < length; i++) {
-//		crc ^= (uint8_t)data[i]; // XOR z bieżącym bajtem
-//		for (uint8_t bit = 0; bit < 8; bit++) {
-//			if (crc & 0x0001) crc = (crc >> 1) ^ polynomial;
-//			else crc >>= 1;
-//		}
-//	}
-//	return crc;
-//}
-
 uint16_t calculate_crc_byte(uint16_t crc, uint8_t data) {
 	crc ^= (data << 8);
 	for (uint8_t i = 0; i < 8; i++) {
@@ -152,8 +137,6 @@ uint16_t calculate_crc_byte(uint16_t crc, uint8_t data) {
 	}
 	return crc;
 }
-
-
 
 uint8_t USART_kbhit(){
 	if (USART_RX_EMPTY == USART_RX_BUSY){
@@ -235,10 +218,14 @@ uint16_t validate_and_atoi(const char *str, size_t length) {
     return result;
 }
 
+void err01() {
+
+}
+
 void process_frame() {
 
 
-	if (frame.length < 5 || frame.length > 256) {
+	if (frame.length_int < 5 || frame.length_int > 256) {
 		//err01();
 		return;
 	}
@@ -248,7 +235,7 @@ void process_frame() {
 
 	if (strncmp((char *)frame.data, "READ", 4) == 0) {
 		if (length != 7) {
-			//USART_fsend("wrong parameter");
+			USART_fsend("wrong parameter");
 			//err03();
 			return;
 		}
@@ -266,12 +253,13 @@ void process_frame() {
 //			return;
 //		}
 //		else {
+//			USART_fsend("%d\n", parameter);
 //			read(length);
 //			return;
 //		}
 	}
 	else if (strncmp((char *)frame.data, "COUNT_DATA", 10) == 0) {
-		if (frame.length_int != 10) {
+		if (length != 10) {
 			//USART_fsend("wrong command");
 			//err02();
 			return;
@@ -283,7 +271,7 @@ void process_frame() {
 	}
 
 	else if (strncmp((char *)frame.data, "SET_INTERVAL", 12) == 0) {
-		if (frame.length_int != 17) {
+		if (length != 17) {
 			//USART_fsend("wrong command");
 			//err02();
 			return;
@@ -344,7 +332,7 @@ void get_frame(uint8_t ch) {
 			if (frame.sender_id == 1) {
 				frame.sender[2] = '\0';
 				if (strncmp((char *)frame.sender, SENDER, 2) == 0){
-//					USART_fsend("sender ok");
+					//USART_fsend("sender ok");
 					frame.state = FIND_RECEIVER;
 					return;
 				}
@@ -366,7 +354,7 @@ void get_frame(uint8_t ch) {
 			if (frame.receiver_id == 1) {
 				frame.receiver[2] = '\0';
 				if (strncmp((char *)frame.receiver, RECEIVER, 2) == 0) {
-//					USART_fsend("receiver ok");
+					//USART_fsend("receiver ok");
 					frame.state = FIND_LENGTH;
 					return;
 				}
@@ -388,6 +376,7 @@ void get_frame(uint8_t ch) {
 			if (frame.length_id == 2) {
 				frame.length[3] = '\0';
 				frame.length_int = atoi((char *)frame.length);
+				//USART_fsend("length ok");
 				frame.state = FIND_DATA;
 				return;
 			}
@@ -416,12 +405,19 @@ void get_frame(uint8_t ch) {
 			}
 
 			frame.data[frame.data_id++] = ch;
-			return;
 
+			if (frame.data_id + frame.masked_counter == frame.length_int) {
+				frame.data[frame.data_id] = '\0';
+				//USART_fsend("data ok");
+				frame.state = FIND_CRC;
+			}
+
+			return;
 		}
+
+
 		else {
-			frame.data[frame.data_id] = '\0';
-			frame.state = FIND_CRC;
+			frame.state = FIND_START;
 			return;
 		}
 	}
@@ -473,16 +469,18 @@ void get_frame(uint8_t ch) {
 			if (frame.crc_id == 4) {
 				frame.crc_frame[4] = '\0';
 				if ((uint16_t)strtol((char *)frame.crc_frame, NULL, 16) == frame.crc_calculated) {
+					//USART_fsend("crc ok");
 					frame.state = FIND_END;
 					return;
 				}
 				else {
+					//USART_fsend("crc blad");
 					frame.state = FIND_START;
 					return;
 				}
 			}
 		}
-		else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
+		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
 		else frame.state = FIND_START;
 		return;
 	}
@@ -490,10 +488,11 @@ void get_frame(uint8_t ch) {
 	case FIND_END: {
 		if (ch == FRAME_END) {
 			frame.complete = true;
+			USART_fsend("ramka ok");
 			process_frame();
 			return;
 		}
-		else if (ch == FRAME_START) frame.state = FIND_START;
+		//else if (ch == FRAME_START) frame.state = FIND_START;
 		else frame.state = FIND_START;
 		return;
 	}
@@ -505,7 +504,7 @@ void handle_char() {
 //	is_handling = 1;
 
 	int16_t ch;
-	if ((ch = USART_getchar()) >= 0 && ch <= 255) {
+	if ((ch = USART_getchar()) >= 0) {
 		//USART_fsend("  |%c|  ", ch);
 		get_frame((uint8_t)ch);
 	}
