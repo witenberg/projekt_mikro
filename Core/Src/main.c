@@ -218,9 +218,9 @@ uint16_t validate_and_atoi(const char *str, size_t length) {
     return result;
 }
 
-void err01() {
-
-}
+//void err01() {
+//
+//}
 
 void process_frame() {
 
@@ -248,7 +248,6 @@ void process_frame() {
 			return;
 		}
 //		else if (parameter < dht_data_counter) {
-//			printf ("not enough data in buffer");
 //			err04();
 //			return;
 //		}
@@ -316,7 +315,7 @@ void get_frame(uint8_t ch) {
 		frame.state = FIND_START;
 		return;
 	}
-
+	// jak sie wysle :: to jest zle i chuj
 	switch (frame.state) {
 	case FIND_START: {
 		if (ch == FRAME_START) {
@@ -329,6 +328,7 @@ void get_frame(uint8_t ch) {
 	case FIND_SENDER: {
 		if (ch >= 'A' && ch <= 'Z') {
 			frame.sender[frame.sender_id] = ch;
+			frame.crc_calculated = calculate_crc_byte(frame.crc_calculated, ch);
 			if (frame.sender_id == 1) {
 				frame.sender[2] = '\0';
 				if (strncmp((char *)frame.sender, SENDER, 2) == 0){
@@ -351,6 +351,7 @@ void get_frame(uint8_t ch) {
 	case FIND_RECEIVER: {
 		if (ch >= 'A' && ch <= 'Z') {
 			frame.receiver[frame.receiver_id] = ch;
+			frame.crc_calculated = calculate_crc_byte(frame.crc_calculated, ch);
 			if (frame.receiver_id == 1) {
 				frame.receiver[2] = '\0';
 				if (strncmp((char *)frame.receiver, RECEIVER, 2) == 0) {
@@ -373,6 +374,7 @@ void get_frame(uint8_t ch) {
 	case FIND_LENGTH: {
 		if (ch >= '0' && ch <= '9') {
 			frame.length[frame.length_id] = ch;
+			frame.crc_calculated = calculate_crc_byte(frame.crc_calculated, ch);
 			if (frame.length_id == 2) {
 				frame.length[3] = '\0';
 				frame.length_int = atoi((char *)frame.length);
@@ -488,7 +490,7 @@ void get_frame(uint8_t ch) {
 	case FIND_END: {
 		if (ch == FRAME_END) {
 			frame.complete = true;
-			USART_fsend("ramka ok");
+			//USART_fsend("ramka ok");
 			process_frame();
 			return;
 		}
