@@ -1,0 +1,4 @@
+../Core/Src/dht11.c:9:6:init_dht11	24	static
+../Core/Src/dht11.c:18:6:add_to_dht11_buf	24	static
+../Core/Src/dht11.c:26:6:set_dht11_gpio_mode	32	static
+../Core/Src/dht11.c:44:9:readDHT11	32	static,ignoring_inline_asm

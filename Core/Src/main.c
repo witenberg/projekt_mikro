@@ -25,12 +25,14 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "stm32f1xx_hal.h"
+#include "dht11.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include <ctype.h>
 
 /* USER CODE END Includes */
 
@@ -78,13 +80,13 @@ uint8_t USART_BUF_TX[USART_TXBUF_SIZE];
 volatile uint16_t USART_TX_EMPTY = 0;
 volatile uint16_t USART_TX_BUSY = 0;
 
-/* Flagi */
-//volatile uint8_t is_handling = 0; // flaga sprawdzająca, czy jest aktualnie obsługiwany jakiś znak
+volatile uint8_t DHT11_READ_FLAG = 0;
+uint32_t measurement_interval = 5000;
 
 
 /* Stany */
 typedef enum {
-	FIND_START,
+	IDLE,
 	FIND_SENDER,
 	FIND_RECEIVER,
 	FIND_LENGTH,
@@ -117,6 +119,9 @@ typedef struct {
 
 Frame frame;
 
+dht11_t dht;
+dht11_t *pDHT = &dht;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -138,12 +143,15 @@ uint16_t calculate_crc_byte(uint16_t crc, uint8_t data) {
 	return crc;
 }
 
-uint8_t USART_kbhit(){
-	if (USART_RX_EMPTY == USART_RX_BUSY){
-		return 0;
-	} else {
-		return 1;
-	}
+uint16_t calculate_crc_string(const char *str) {
+    uint16_t crc = 0xFFFF; // Początkowa wartość CRC
+
+    while (*str) {
+        crc = calculate_crc_byte(crc, (uint8_t)*str);
+        str++;
+    }
+
+    return crc;
 }
 
 void USART_fsend(char* format, ...) {
@@ -218,9 +226,23 @@ uint16_t validate_and_atoi(const char *str, size_t length) {
     return result;
 }
 
-//void err01() {
-//
-//}
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+    if (htim->Instance == TIM4) {
+    	__HAL_TIM_SET_AUTORELOAD(&htim4, measurement_interval - 1);
+        // tutaj funkcja do czytania
+    	DHT11_READ_FLAG = 1;
+    }
+}
+
+void set_interval(uint32_t interval) {
+	measurement_interval = interval; // Przypisz nowy interwał
+	__HAL_TIM_SET_AUTORELOAD(&htim4, interval - 1);  // Ustawiamy okres
+	HAL_TIM_Base_Stop_IT(&htim4);
+	HAL_TIM_Base_Start_IT(&htim4);
+
+	USART_fsend("INTERVAL_OK");
+}
+
 
 void process_frame() {
 
@@ -231,7 +253,6 @@ void process_frame() {
 	}
 
 	uint8_t length = frame.length_int - frame.masked_counter; // dla odkodowanej ramki dlugosc musi byc pomniejszona o ilosc zamaskowanych znakow
-
 
 	if (strncmp((char *)frame.data, "READ", 4) == 0) {
 		if (length != 7) {
@@ -270,24 +291,33 @@ void process_frame() {
 	}
 
 	else if (strncmp((char *)frame.data, "SET_INTERVAL", 12) == 0) {
-		if (length != 17) {
+		if (length < 17 || length > 22) {
 			//USART_fsend("wrong command");
 			//err02();
 			return;
 		}
 
-		char parameter_str[6] = { frame.data[12], frame.data[13], frame.data[14], frame.data[15], frame.data[16], '\0' };
-		uint16_t parameter = validate_and_atoi(parameter_str, 5);
+	    // Wskaźnik na część danych po "SET_INTERVAL "
+	    char *numberStr = (char *)&frame.data[12];
+	    uint8_t numberLength = length - 12;
 
-		if (parameter < 2000 || parameter > 20000) {
-			//USART_fsend("wrong parameter");
-			//err03();
-			return;
-		}
-//		else {
-//			set_interval(parameter);
-//			return;
-//		}
+	    // Walidacja - upewnij się, że wszystkie znaki są cyframi
+	    for (uint8_t i = 0; i < numberLength; i++) {
+	        if (!isdigit((unsigned char)numberStr[i])) {
+	            //err03();
+	            return;
+	        }
+	    }
+
+	    int interval = atoi(numberStr);
+
+	    if (interval < 2000 || interval > UINT32_MAX) {
+//	    	err03();
+//	    	return
+	    }
+	    set_interval(interval);
+	    return;
+
 	}
 
 	else if (strncmp((char *)frame.data, "GET_INTERVAL", 12) == 0) {
@@ -305,23 +335,24 @@ void process_frame() {
 
 void reset_frame() {
 	memset(&frame, 0, sizeof(Frame));
-	frame.state = FIND_START;
+	frame.state = IDLE;
 	frame.crc_calculated = 0xFFFF;
 }
 
 void get_frame(uint8_t ch) {
 
-	if (ch == '\0') {
-		frame.state = FIND_START;
+	if (ch == FRAME_START) {
+		reset_frame();
+		frame.state = FIND_SENDER;
 		return;
 	}
-	// jak sie wysle :: to jest zle i chuj
+	if (ch == '\0') {
+		frame.state = IDLE;
+		return;
+	}
+
 	switch (frame.state) {
-	case FIND_START: {
-		if (ch == FRAME_START) {
-			reset_frame();
-			frame.state = FIND_SENDER;
-		}
+	case IDLE: {
 		return;
 	}
 
@@ -337,14 +368,14 @@ void get_frame(uint8_t ch) {
 					return;
 				}
 				else {
-					frame.state = FIND_START;
+					frame.state = IDLE;
 					return;
 				}
 			}
 			else frame.sender_id++;
 		}
 		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FIND_START;
+		else frame.state = IDLE;
 		return;
 	}
 
@@ -360,14 +391,14 @@ void get_frame(uint8_t ch) {
 					return;
 				}
 				else {
-					frame.state = FIND_START;
+					frame.state = IDLE;
 					return;
 				}
 			}
 			else frame.receiver_id++;
 		}
 		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FRAME_START;
+		else frame.state = IDLE;
 		return;
 	}
 
@@ -385,7 +416,7 @@ void get_frame(uint8_t ch) {
 			else frame.length_id++;
 		}
 		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FRAME_START;
+		else frame.state = IDLE;
 		return;
 	}
 
@@ -394,7 +425,7 @@ void get_frame(uint8_t ch) {
 		if (frame.data_id + frame.masked_counter < frame.length_int) {
 
 			if (ch == FRAME_START || ch == FRAME_END) {
-				frame.state = FIND_START;
+				frame.state = IDLE;
 				return;
 			}
 
@@ -419,7 +450,7 @@ void get_frame(uint8_t ch) {
 
 
 		else {
-			frame.state = FIND_START;
+			frame.state = IDLE;
 			return;
 		}
 	}
@@ -427,7 +458,7 @@ void get_frame(uint8_t ch) {
 	case FIND_MASKED: {
 
 		if (frame.data_id + frame.masked_counter >= frame.length_int) {
-			frame.state = FIND_START;
+			frame.state = IDLE;
 			return;
 		}
 
@@ -448,7 +479,7 @@ void get_frame(uint8_t ch) {
 			break;
 		}
 		default: { // błąd, powrót do początku
-			frame.state = FIND_START;
+			frame.state = IDLE;
 			return;
 		}
 		}
@@ -477,13 +508,13 @@ void get_frame(uint8_t ch) {
 				}
 				else {
 					//USART_fsend("crc blad");
-					frame.state = FIND_START;
+					frame.state = IDLE;
 					return;
 				}
 			}
 		}
 		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FIND_START;
+		else frame.state = IDLE;
 		return;
 	}
 
@@ -495,7 +526,7 @@ void get_frame(uint8_t ch) {
 			return;
 		}
 		//else if (ch == FRAME_START) frame.state = FIND_START;
-		else frame.state = FIND_START;
+		else frame.state = IDLE;
 		return;
 	}
 	}
@@ -533,7 +564,6 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -547,11 +577,15 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_TIM2_Init();
+  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
+  init_dht11(pDHT, GPIOA, GPIO_PIN_0, &htim2);
   HAL_UART_Receive_IT(&huart2, &USART_BUF_RX[USART_RX_EMPTY], 1);
 
-  //TIM2_Init();
-  //DHT11_GPIO_Init();
+  // Rozpocznij przechwytywanie na timerze
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
+
 
   /* USER CODE END 2 */
 
@@ -559,6 +593,10 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  if (DHT11_READ_FLAG) {
+		  DHT11_READ_FLAG = 0;
+		  readDHT11(pDHT);
+	  }
 	  // jeśli bufor nie jest pusty
 	  if (USART_RX_EMPTY != USART_RX_BUSY) {
 		  handle_char();
