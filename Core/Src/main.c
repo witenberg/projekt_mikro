@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include <ctype.h>
 
 /* USER CODE END Includes */
 
@@ -84,7 +85,7 @@ volatile uint16_t USART_TX_BUSY = 0;
 
 /* Stany */
 typedef enum {
-	FIND_START,
+	IDLE,
 	FIND_SENDER,
 	FIND_RECEIVER,
 	FIND_LENGTH,
@@ -234,28 +235,46 @@ void process_frame() {
 
 
 	if (strncmp((char *)frame.data, "READ", 4) == 0) {
-		if (length != 7) {
-			USART_fsend("wrong parameter");
+
+		char *start_ptr = (char *)&frame.data[4];
+		char *dash_ptr = strchr(start_ptr, '-');
+
+		if (!dash_ptr) {
+			USART_fsend("brak myslnika");
 			//err03();
 			return;
 		}
 
-		char parameter_str[4] = {frame.data[4], frame.data[5], frame.data[6]};
-		uint16_t parameter = validate_and_atoi(parameter_str, 3);
+		char start_str[4] = {0};
+		char count_str[3] = {0};
 
-		if (parameter < 1 || parameter > 750) {
+		size_t start_length = dash_ptr - (char *)frame.data - 4;
+		if (start_length >= sizeof(start_str)) {
+			USART_fsend("zly parametr");
 			//err03();
 			return;
 		}
-//		else if (parameter < dht_data_counter) {
-//			err04();
-//			return;
-//		}
-//		else {
-//			USART_fsend("%d\n", parameter);
-//			read(length);
-//			return;
-//		}
+		memcpy(start_str, frame.data + 4, start_length);
+
+		size_t count_length = (uint8_t *)frame.data + length - ((uint8_t *)dash_ptr + 1);
+		if (count_length >= sizeof(count_str)) {
+			USART_fsend("zly parametr");
+			//err03();
+			return;
+		}
+		memcpy(count_str, dash_ptr + 1, count_length);
+
+		uint8_t start = validate_and_atoi(start_str, start_length);
+		uint8_t count = validate_and_atoi(count_str, count_length);
+
+		if (start < 1 || start > 750 || count < 1 || count > 21 || (start + count - 1) > 750) {
+			USART_fsend("zly parametr");
+			//err03();
+			return;
+		}
+
+		USART_fsend("READ(%d - %d)", start, count);
+		return;
 	}
 	else if (strncmp((char *)frame.data, "COUNT_DATA", 10) == 0) {
 		if (length != 10) {
@@ -270,24 +289,39 @@ void process_frame() {
 	}
 
 	else if (strncmp((char *)frame.data, "SET_INTERVAL", 12) == 0) {
-		if (length != 17) {
+		if (length < 16 || length > 22) {
 			//USART_fsend("wrong command");
 			//err02();
 			return;
 		}
 
-		char parameter_str[6] = { frame.data[12], frame.data[13], frame.data[14], frame.data[15], frame.data[16], '\0' };
-		uint16_t parameter = validate_and_atoi(parameter_str, 5);
+		char *numberStr = (char *)&frame.data[12];
+		uint8_t numberLength = length - 12;
 
-		if (parameter < 2000 || parameter > 20000) {
-			//USART_fsend("wrong parameter");
+		for (uint8_t i = 0; i < numberLength; i++){
+			if (!isdigit((unsigned char)numberStr[i])) {
+				//err03();
+				return;
+			}
+		}
+
+		char *endptr;
+		uint32_t interval = strtoul(numberStr, &endptr, 10);
+
+		if (*endptr != '\0') {
+			//err03();
+			USART_fsend("blad przy konwersji");
+			return;
+		}
+
+		if (interval < 2000 || interval > UINT32_MAX) {
 			//err03();
 			return;
 		}
-//		else {
-//			set_interval(parameter);
-//			return;
-//		}
+
+		//setinterval
+		USART_fsend("interval: %lu ", interval);
+		return;
 	}
 
 	else if (strncmp((char *)frame.data, "GET_INTERVAL", 12) == 0) {
@@ -305,23 +339,24 @@ void process_frame() {
 
 void reset_frame() {
 	memset(&frame, 0, sizeof(Frame));
-	frame.state = FIND_START;
+	frame.state = IDLE;
 	frame.crc_calculated = 0xFFFF;
 }
 
 void get_frame(uint8_t ch) {
 
-	if (ch == '\0') {
-		frame.state = FIND_START;
+	if (ch == FRAME_START) {
+		reset_frame();
+		frame.state = FIND_SENDER;
 		return;
 	}
-	// jak sie wysle :: to jest zle i chuj
+	if (ch == '\0') {
+		frame.state = IDLE;
+		return;
+	}
+
 	switch (frame.state) {
-	case FIND_START: {
-		if (ch == FRAME_START) {
-			reset_frame();
-			frame.state = FIND_SENDER;
-		}
+	case IDLE: {
 		return;
 	}
 
@@ -337,14 +372,14 @@ void get_frame(uint8_t ch) {
 					return;
 				}
 				else {
-					frame.state = FIND_START;
+					frame.state = IDLE;
 					return;
 				}
 			}
 			else frame.sender_id++;
 		}
 		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FIND_START;
+		else frame.state = IDLE;
 		return;
 	}
 
@@ -355,19 +390,19 @@ void get_frame(uint8_t ch) {
 			if (frame.receiver_id == 1) {
 				frame.receiver[2] = '\0';
 				if (strncmp((char *)frame.receiver, RECEIVER, 2) == 0) {
-					//USART_fsend("receiver ok");
+					USART_fsend("receiver ok");
 					frame.state = FIND_LENGTH;
 					return;
 				}
 				else {
-					frame.state = FIND_START;
+					frame.state = IDLE;
 					return;
 				}
 			}
 			else frame.receiver_id++;
 		}
 		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FRAME_START;
+		else frame.state = IDLE;
 		return;
 	}
 
@@ -378,14 +413,14 @@ void get_frame(uint8_t ch) {
 			if (frame.length_id == 2) {
 				frame.length[3] = '\0';
 				frame.length_int = atoi((char *)frame.length);
-				//USART_fsend("length ok");
+				USART_fsend("length ok");
 				frame.state = FIND_DATA;
 				return;
 			}
 			else frame.length_id++;
 		}
 		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FRAME_START;
+		else frame.state = IDLE;
 		return;
 	}
 
@@ -394,7 +429,7 @@ void get_frame(uint8_t ch) {
 		if (frame.data_id + frame.masked_counter < frame.length_int) {
 
 			if (ch == FRAME_START || ch == FRAME_END) {
-				frame.state = FIND_START;
+				frame.state = IDLE;
 				return;
 			}
 
@@ -410,7 +445,7 @@ void get_frame(uint8_t ch) {
 
 			if (frame.data_id + frame.masked_counter == frame.length_int) {
 				frame.data[frame.data_id] = '\0';
-				//USART_fsend("data ok");
+				USART_fsend("data ok");
 				frame.state = FIND_CRC;
 			}
 
@@ -419,7 +454,7 @@ void get_frame(uint8_t ch) {
 
 
 		else {
-			frame.state = FIND_START;
+			frame.state = IDLE;
 			return;
 		}
 	}
@@ -427,7 +462,7 @@ void get_frame(uint8_t ch) {
 	case FIND_MASKED: {
 
 		if (frame.data_id + frame.masked_counter >= frame.length_int) {
-			frame.state = FIND_START;
+			frame.state = IDLE;
 			return;
 		}
 
@@ -448,7 +483,7 @@ void get_frame(uint8_t ch) {
 			break;
 		}
 		default: { // błąd, powrót do początku
-			frame.state = FIND_START;
+			frame.state = IDLE;
 			return;
 		}
 		}
@@ -471,31 +506,31 @@ void get_frame(uint8_t ch) {
 			if (frame.crc_id == 4) {
 				frame.crc_frame[4] = '\0';
 				if ((uint16_t)strtol((char *)frame.crc_frame, NULL, 16) == frame.crc_calculated) {
-					//USART_fsend("crc ok");
+					USART_fsend("crc ok");
 					frame.state = FIND_END;
 					return;
 				}
 				else {
-					//USART_fsend("crc blad");
-					frame.state = FIND_START;
+					USART_fsend("crc blad");
+					frame.state = IDLE;
 					return;
 				}
 			}
 		}
 		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
-		else frame.state = FIND_START;
+		else frame.state = IDLE;
 		return;
 	}
 
 	case FIND_END: {
 		if (ch == FRAME_END) {
 			frame.complete = true;
-			//USART_fsend("ramka ok");
+			USART_fsend("ramka ok");
 			process_frame();
 			return;
 		}
 		//else if (ch == FRAME_START) frame.state = FIND_START;
-		else frame.state = FIND_START;
+		else frame.state = IDLE;
 		return;
 	}
 	}
