@@ -332,7 +332,7 @@ void get_frame(uint8_t ch) {
 			if (frame.sender_id == 1) {
 				frame.sender[2] = '\0';
 				if (strncmp((char *)frame.sender, SENDER, 2) == 0){
-					//USART_fsend("sender ok");
+					USART_fsend("sender ok");
 					frame.state = FIND_RECEIVER;
 					return;
 				}

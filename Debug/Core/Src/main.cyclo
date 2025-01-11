@@ -5,7 +5,6 @@
 ../Core/Src/main.c:183:6:HAL_UART_TxCpltCallback	4
 ../Core/Src/main.c:195:9:USART_getchar	3
 ../Core/Src/main.c:206:10:validate_and_atoi	4
-../Core/Src/main.c:221:6:err01	1
 ../Core/Src/main.c:225:6:process_frame	11
 ../Core/Src/main.c:306:6:reset_frame	1
 ../Core/Src/main.c:312:6:get_frame	40
