@@ -128,6 +128,8 @@ dht11_t *pDHT = &dht;
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 
+
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -255,19 +257,70 @@ void process_frame() {
 	uint8_t length = frame.length_int - frame.masked_counter; // dla odkodowanej ramki dlugosc musi byc pomniejszona o ilosc zamaskowanych znakow
 
 	if (strncmp((char *)frame.data, "READ", 4) == 0) {
-		if (length != 7) {
-			USART_fsend("wrong parameter");
+
+		char *start_ptr = (char *)&frame.data[4];
+		char *dash_ptr = strchr(start_ptr, '-');
+
+		if (!dash_ptr) {
+			USART_fsend("brak myslnika");
 			//err03();
 			return;
 		}
 
-		char parameter_str[4] = {frame.data[4], frame.data[5], frame.data[6]};
-		uint16_t parameter = validate_and_atoi(parameter_str, 3);
+		char start_str[4] = {0}; //maks 750
+		char count_str[3] = {0}; //maks 21
 
-		if (parameter < 1 || parameter > 750) {
+		size_t start_length = dash_ptr - (char *)frame.data - 4;
+		if (start_length >= sizeof(start_str)) {
+		    USART_fsend("zly parametr");
+		    //err03();
+		    return;
+		}
+		memcpy(start_str, frame.data + 4, start_length);
+
+		size_t count_length = (uint8_t *)frame.data + length - ((uint8_t *)dash_ptr + 1);
+		if (count_length >= sizeof(count_str)) {
+			USART_fsend("zly parametr");
 			//err03();
 			return;
 		}
+		memcpy(count_str, dash_ptr + 1, count_length);
+
+		uint16_t start = validate_and_atoi(start_str, start_length);
+		uint16_t count = validate_and_atoi(count_str, count_length);
+
+		if (start < 1 || start > DHT11_BUF_SIZE || count < 1 || count > 21 || (start + count - 1) > DHT11_BUF_SIZE) {
+			USART_fsend("zly parametr");
+			//err03();
+			return;
+		}
+
+//		if (start > dht_data_counter) {
+//			err04();
+//			return;
+//		}
+//
+//		read(start, count);
+
+		USART_fsend("READ(%d - %d", start, count);
+		return;
+
+
+
+
+//		if (length < 9 || length >  || frame.data[4] != '[' || frame.data[length - 1] != ']') {
+//			USART_fsend("wrong parameter");
+//			//err03();
+//			return;
+//		}
+//
+//		char parameter_str[4] = {frame.data[4], frame.data[5], frame.data[6]};
+//		uint16_t parameter = validate_and_atoi(parameter_str, 3);
+//
+//		if (parameter < 1 || parameter > 750) {
+//			//err03();
+//			return;
+//		}
 //		else if (parameter < dht_data_counter) {
 //			err04();
 //			return;
@@ -297,11 +350,9 @@ void process_frame() {
 			return;
 		}
 
-	    // Wskaźnik na część danych po "SET_INTERVAL "
 	    char *numberStr = (char *)&frame.data[12];
 	    uint8_t numberLength = length - 12;
 
-	    // Walidacja - upewnij się, że wszystkie znaki są cyframi
 	    for (uint8_t i = 0; i < numberLength; i++) {
 	        if (!isdigit((unsigned char)numberStr[i])) {
 	            //err03();
@@ -363,7 +414,7 @@ void get_frame(uint8_t ch) {
 			if (frame.sender_id == 1) {
 				frame.sender[2] = '\0';
 				if (strncmp((char *)frame.sender, SENDER, 2) == 0){
-					//USART_fsend("sender ok");
+					USART_fsend("sender ok");
 					frame.state = FIND_RECEIVER;
 					return;
 				}
@@ -386,7 +437,7 @@ void get_frame(uint8_t ch) {
 			if (frame.receiver_id == 1) {
 				frame.receiver[2] = '\0';
 				if (strncmp((char *)frame.receiver, RECEIVER, 2) == 0) {
-					//USART_fsend("receiver ok");
+					USART_fsend("receiver ok");
 					frame.state = FIND_LENGTH;
 					return;
 				}
@@ -409,7 +460,7 @@ void get_frame(uint8_t ch) {
 			if (frame.length_id == 2) {
 				frame.length[3] = '\0';
 				frame.length_int = atoi((char *)frame.length);
-				//USART_fsend("length ok");
+				USART_fsend("length ok");
 				frame.state = FIND_DATA;
 				return;
 			}
@@ -441,7 +492,7 @@ void get_frame(uint8_t ch) {
 
 			if (frame.data_id + frame.masked_counter == frame.length_int) {
 				frame.data[frame.data_id] = '\0';
-				//USART_fsend("data ok");
+				USART_fsend("data ok");
 				frame.state = FIND_CRC;
 			}
 
@@ -502,12 +553,12 @@ void get_frame(uint8_t ch) {
 			if (frame.crc_id == 4) {
 				frame.crc_frame[4] = '\0';
 				if ((uint16_t)strtol((char *)frame.crc_frame, NULL, 16) == frame.crc_calculated) {
-					//USART_fsend("crc ok");
+					USART_fsend("crc ok");
 					frame.state = FIND_END;
 					return;
 				}
 				else {
-					//USART_fsend("crc blad");
+					USART_fsend("crc blad");
 					frame.state = IDLE;
 					return;
 				}
@@ -521,7 +572,7 @@ void get_frame(uint8_t ch) {
 	case FIND_END: {
 		if (ch == FRAME_END) {
 			frame.complete = true;
-			//USART_fsend("ramka ok");
+			USART_fsend("ramka ok");
 			process_frame();
 			return;
 		}
@@ -538,7 +589,7 @@ void handle_char() {
 
 	int16_t ch;
 	if ((ch = USART_getchar()) >= 0) {
-		//USART_fsend("  |%c|  ", ch);
+		USART_fsend("%c", ch);
 		get_frame((uint8_t)ch);
 	}
 
@@ -555,7 +606,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -579,13 +629,12 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
-  init_dht11(pDHT, GPIOA, GPIO_PIN_0, &htim2);
-  HAL_UART_Receive_IT(&huart2, &USART_BUF_RX[USART_RX_EMPTY], 1);
 
-  // Rozpocznij przechwytywanie na timerze
+  init_dht11(pDHT, GPIOA, GPIO_PIN_0, &htim2);
+
+  // Rozpocznij przechwytywanie na timerze/
   HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
   HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
-
 
   /* USER CODE END 2 */
 
@@ -597,6 +646,7 @@ int main(void)
 		  DHT11_READ_FLAG = 0;
 		  readDHT11(pDHT);
 	  }
+	  USART_fsend("haloo");
 	  // jeśli bufor nie jest pusty
 	  if (USART_RX_EMPTY != USART_RX_BUSY) {
 		  handle_char();

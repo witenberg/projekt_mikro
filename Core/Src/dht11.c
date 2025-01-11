@@ -5,6 +5,7 @@
  *      Author: kubaw
  */
 #include "dht11.h"
+#include "main.h"
 
 void init_dht11(dht11_t *dht, GPIO_TypeDef* port, uint16_t pin, TIM_HandleTypeDef *htim){
 	dht->htim = htim;
@@ -88,7 +89,7 @@ uint8_t readDHT11(dht11_t *dht) {
     	return 1;
     }
 
-    fsend("otrzymano dane");
+    USART_fsend("otrzymano dane");
 
     add_to_dht11_buf(dht, data);
     return 0;
