@@ -57,6 +57,7 @@
 #define SENDER "PC"
 #define RECEIVER "MC"
 
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -80,6 +81,8 @@ volatile uint16_t USART_TX_EMPTY = 0;
 volatile uint16_t USART_TX_BUSY = 0;
 
 /* Flagi */
+volatile uint8_t DHT11_READ_FLAG = 0;
+uint32_t measurement_interval = 5000;
 //volatile uint8_t is_handling = 0; // flaga sprawdzająca, czy jest aktualnie obsługiwany jakiś znak
 
 
@@ -117,6 +120,9 @@ typedef struct {
 } Frame;
 
 Frame frame;
+
+dht11_t dht;
+dht11_t *pDHT = &dht;
 
 /* USER CODE END PV */
 
@@ -202,6 +208,29 @@ int16_t USART_getchar(){
 		 return tmp;
 	} else return -1;
 
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+	USART_fsend("przerwanie");
+    if (htim->Instance == TIM4) {
+    	DHT11_READ_FLAG = 1;
+    	USART_fsend("czytanie");
+    	DHT11_READ_FLAG = 0;
+    }
+}
+
+void set_interval(uint32_t interval) {
+	measurement_interval = interval; // Przypisz nowy interwał
+	HAL_TIM_Base_Stop_IT(&htim4);
+	__HAL_TIM_SET_COUNTER(&htim4, 0);
+	__HAL_TIM_SET_AUTORELOAD(&htim4, interval - 1);  // Ustawiamy okres
+	HAL_TIM_Base_Start_IT(&htim4);
+
+	USART_fsend("INTERVAL_OK");
+}
+
+void get_interval() {
+	USART_fsend("interval=%lu", measurement_interval);
 }
 
 uint16_t validate_and_atoi(const char *str, size_t length) {
@@ -319,7 +348,7 @@ void process_frame() {
 			return;
 		}
 
-		//setinterval
+		set_interval(interval);
 		USART_fsend("interval: %lu ", interval);
 		return;
 	}
@@ -330,10 +359,9 @@ void process_frame() {
 			//err02();
 			return;
 		}
-//		else {
-//			get_interval();
-//			return
-//		}
+		get_interval();
+		return;
+
 	}
 }
 
@@ -568,7 +596,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  init_dht11(pDHT, GPIOA, GPIO_PIN_0, &htim2);
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -582,11 +610,10 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_TIM2_Init();
+  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
+  HAL_TIM_Base_Start_IT(&htim4);
   HAL_UART_Receive_IT(&huart2, &USART_BUF_RX[USART_RX_EMPTY], 1);
-
-  //TIM2_Init();
-  //DHT11_GPIO_Init();
 
   /* USER CODE END 2 */
 
