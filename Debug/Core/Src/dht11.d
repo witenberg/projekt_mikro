@@ -25,7 +25,7 @@ Core/Src/dht11.o: ../Core/Src/dht11.c ../Core/Inc/dht11.h \
  ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim.h \
  ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim_ex.h \
  ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h \
- ../Core/Inc/dht11.h ../Core/Inc/stm32f1xx_it.h
+ ../Core/Inc/dht11.h ../Core/Inc/stm32f1xx_it.h ../Core/Inc/tim.h
 ../Core/Inc/dht11.h:
 ../Core/Inc/gpio.h:
 ../Core/Inc/main.h:
@@ -56,3 +56,4 @@ Core/Src/dht11.o: ../Core/Src/dht11.c ../Core/Inc/dht11.h \
 ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h:
 ../Core/Inc/dht11.h:
 ../Core/Inc/stm32f1xx_it.h:
+../Core/Inc/tim.h:

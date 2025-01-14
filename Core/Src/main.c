@@ -212,8 +212,21 @@ int16_t USART_getchar(){
 }
 
 void delay_us(uint16_t us) {
+	HAL_TIM_Base_Stop(&htim3);
 	__HAL_TIM_SET_COUNTER(&htim3,0);
+	HAL_TIM_Base_Start(&htim3);
+
 	while (__HAL_TIM_GET_COUNTER(&htim3) < us);
+
+	HAL_TIM_Base_Stop(&htim3);
+
+
+}
+
+void count_us() {
+	HAL_TIM_Base_Stop(&htim3);
+	__HAL_TIM_SET_COUNTER(&htim3, 0);
+	HAL_TIM_Base_Start(&htim3);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
@@ -260,7 +273,6 @@ uint16_t validate_and_atoi(const char *str, size_t length) {
 //}
 
 void process_frame() {
-
 
 	if (frame.length_int < 5 || frame.length_int > 256) {
 		//err01();
@@ -345,13 +357,13 @@ void process_frame() {
 		errno = 0; // globalna zmienna
 		uint32_t interval = strtoul(numberStr, &endptr, 10);
 
-		if (*endptr != '\0') {
-			//err03();
-			//USART_fsend("blad przy konwersji");
-			return;
-		}
+//		if (*endptr != '\0') {
+//			//err03();
+//			//USART_fsend("blad przy konwersji");
+//			return;
+//		}
 
-		if (interval < 2000 || errno == ERANGE) {
+		if (*endptr == '\0' || interval < 2000 || errno == ERANGE) {
 			//err03();
 			return;
 		}
@@ -605,7 +617,7 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_TIM2_Init(); // pwm input
-  MX_TIM3_Init(); // delay us
+  MX_TIM3_Init(); // delay us, count us
   MX_TIM4_Init(); // interval ms
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim3);
@@ -619,10 +631,9 @@ int main(void)
 
   while (1)
   {
+	  // flaga z przerwania tim4
 	  if (DHT11_READ_FLAG) {
-		  __disable_irq();
 		  readDHT11(pDHT);
-		  __enable_irq();
 		  DHT11_READ_FLAG = 0;
 	  }
 	  // jeśli bufor nie jest pusty

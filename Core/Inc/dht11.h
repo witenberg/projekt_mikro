@@ -11,6 +11,7 @@
 #include "gpio.h"
 #include "main.h"
 #include "stm32f1xx_it.h"
+#include "tim.h"
 
 #define OUTPUT 1
 #define INPUT 0
@@ -35,5 +36,7 @@ uint8_t readDHT11(dht11_t *dht);
 
 void USART_fsend(char* format, ...);
 void delay_us(uint16_t us);
+void count_us();
+
 
 #endif /* INC_DHT11_H_ */
