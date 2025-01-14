@@ -32,6 +32,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <errno.h>
 
 /* USER CODE END Includes */
 
@@ -44,6 +45,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
 #define USART_TXBUF_SIZE 1024 // rozmiar bufora nadawczego
 #define USART_RXBUF_SIZE 128 // rozmiar bufora odbiorczego
 
@@ -56,7 +58,6 @@
 
 #define SENDER "PC"
 #define RECEIVER "MC"
-
 
 /* USER CODE END PD */
 
@@ -210,26 +211,32 @@ int16_t USART_getchar(){
 
 }
 
+void delay_us(uint16_t us) {
+	__HAL_TIM_SET_COUNTER(&htim3,0);
+	while (__HAL_TIM_GET_COUNTER(&htim3) < us);
+}
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-	USART_fsend("przerwanie");
     if (htim->Instance == TIM4) {
     	DHT11_READ_FLAG = 1;
-    	USART_fsend("czytanie");
-    	DHT11_READ_FLAG = 0;
     }
 }
 
 void set_interval(uint32_t interval) {
-	measurement_interval = interval; // Przypisz nowy interwał
+
+	// dodac interwal > 16 bitow
+
+	measurement_interval = interval;
 	HAL_TIM_Base_Stop_IT(&htim4);
 	__HAL_TIM_SET_COUNTER(&htim4, 0);
-	__HAL_TIM_SET_AUTORELOAD(&htim4, interval - 1);  // Ustawiamy okres
+	__HAL_TIM_SET_AUTORELOAD(&htim4, interval - 1);
 	HAL_TIM_Base_Start_IT(&htim4);
 
 	USART_fsend("INTERVAL_OK");
 }
 
 void get_interval() {
+	// tutaj bedzie ramka
 	USART_fsend("interval=%lu", measurement_interval);
 }
 
@@ -287,7 +294,7 @@ void process_frame() {
 
 		size_t count_length = (uint8_t *)frame.data + length - ((uint8_t *)dash_ptr + 1);
 		if (count_length >= sizeof(count_str)) {
-			USART_fsend("zly parametr");
+			//USART_fsend("zly parametr");
 			//err03();
 			return;
 		}
@@ -297,12 +304,12 @@ void process_frame() {
 		uint8_t count = validate_and_atoi(count_str, count_length);
 
 		if (start < 1 || start > 750 || count < 1 || count > 21 || (start + count - 1) > 750) {
-			USART_fsend("zly parametr");
+			//USART_fsend("zly parametr");
 			//err03();
 			return;
 		}
 
-		USART_fsend("READ(%d - %d)", start, count);
+		//USART_fsend("READ(%d - %d)", start, count);
 		return;
 	}
 	else if (strncmp((char *)frame.data, "COUNT_DATA", 10) == 0) {
@@ -335,21 +342,22 @@ void process_frame() {
 		}
 
 		char *endptr;
+		errno = 0; // globalna zmienna
 		uint32_t interval = strtoul(numberStr, &endptr, 10);
 
 		if (*endptr != '\0') {
 			//err03();
-			USART_fsend("blad przy konwersji");
+			//USART_fsend("blad przy konwersji");
 			return;
 		}
 
-		if (interval < 2000 || interval > UINT32_MAX) {
+		if (interval < 2000 || errno == ERANGE) {
 			//err03();
 			return;
 		}
 
 		set_interval(interval);
-		USART_fsend("interval: %lu ", interval);
+		//USART_fsend("interval: %lu ", interval);
 		return;
 	}
 
@@ -395,7 +403,7 @@ void get_frame(uint8_t ch) {
 			if (frame.sender_id == 1) {
 				frame.sender[2] = '\0';
 				if (strncmp((char *)frame.sender, SENDER, 2) == 0){
-					USART_fsend("sender ok");
+					//USART_fsend("sender ok");
 					frame.state = FIND_RECEIVER;
 					return;
 				}
@@ -406,7 +414,6 @@ void get_frame(uint8_t ch) {
 			}
 			else frame.sender_id++;
 		}
-		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
 		else frame.state = IDLE;
 		return;
 	}
@@ -418,7 +425,7 @@ void get_frame(uint8_t ch) {
 			if (frame.receiver_id == 1) {
 				frame.receiver[2] = '\0';
 				if (strncmp((char *)frame.receiver, RECEIVER, 2) == 0) {
-					USART_fsend("receiver ok");
+					//USART_fsend("receiver ok");
 					frame.state = FIND_LENGTH;
 					return;
 				}
@@ -429,7 +436,6 @@ void get_frame(uint8_t ch) {
 			}
 			else frame.receiver_id++;
 		}
-		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
 		else frame.state = IDLE;
 		return;
 	}
@@ -441,13 +447,12 @@ void get_frame(uint8_t ch) {
 			if (frame.length_id == 2) {
 				frame.length[3] = '\0';
 				frame.length_int = atoi((char *)frame.length);
-				USART_fsend("length ok");
+				//USART_fsend("length ok");
 				frame.state = FIND_DATA;
 				return;
 			}
 			else frame.length_id++;
 		}
-		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
 		else frame.state = IDLE;
 		return;
 	}
@@ -476,11 +481,8 @@ void get_frame(uint8_t ch) {
 				USART_fsend("data ok");
 				frame.state = FIND_CRC;
 			}
-
 			return;
 		}
-
-
 		else {
 			frame.state = IDLE;
 			return;
@@ -534,18 +536,17 @@ void get_frame(uint8_t ch) {
 			if (frame.crc_id == 4) {
 				frame.crc_frame[4] = '\0';
 				if ((uint16_t)strtol((char *)frame.crc_frame, NULL, 16) == frame.crc_calculated) {
-					USART_fsend("crc ok");
+					//USART_fsend("crc ok");
 					frame.state = FIND_END;
 					return;
 				}
 				else {
-					USART_fsend("crc blad");
+					//USART_fsend("crc blad");
 					frame.state = IDLE;
 					return;
 				}
 			}
 		}
-		//else if (ch == FRAME_START || ch == FRAME_END) frame.state = FIND_START;
 		else frame.state = IDLE;
 		return;
 	}
@@ -557,7 +558,6 @@ void get_frame(uint8_t ch) {
 			process_frame();
 			return;
 		}
-		//else if (ch == FRAME_START) frame.state = FIND_START;
 		else frame.state = IDLE;
 		return;
 	}
@@ -565,16 +565,11 @@ void get_frame(uint8_t ch) {
 }
 
 void handle_char() {
-
-//	is_handling = 1;
-
 	int16_t ch;
 	if ((ch = USART_getchar()) >= 0) {
 		//USART_fsend("  |%c|  ", ch);
 		get_frame((uint8_t)ch);
 	}
-
-//	is_handling = 0;
 }
 
 /* USER CODE END 0 */
@@ -609,9 +604,11 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
-  MX_TIM2_Init();
-  MX_TIM4_Init();
+  MX_TIM2_Init(); // pwm input
+  MX_TIM3_Init(); // delay us
+  MX_TIM4_Init(); // interval ms
   /* USER CODE BEGIN 2 */
+  HAL_TIM_Base_Start(&htim3);
   HAL_TIM_Base_Start_IT(&htim4);
   HAL_UART_Receive_IT(&huart2, &USART_BUF_RX[USART_RX_EMPTY], 1);
 
@@ -619,8 +616,15 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
   while (1)
   {
+	  if (DHT11_READ_FLAG) {
+		  __disable_irq();
+		  readDHT11(pDHT);
+		  __enable_irq();
+		  DHT11_READ_FLAG = 0;
+	  }
 	  // jeśli bufor nie jest pusty
 	  if (USART_RX_EMPTY != USART_RX_BUSY) {
 		  handle_char();

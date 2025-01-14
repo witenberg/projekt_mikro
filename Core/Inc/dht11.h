@@ -34,5 +34,6 @@ void set_dht11_gpio_mode(dht11_t *dht, uint8_t mode);
 uint8_t readDHT11(dht11_t *dht);
 
 void USART_fsend(char* format, ...);
+void delay_us(uint16_t us);
 
 #endif /* INC_DHT11_H_ */

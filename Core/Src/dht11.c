@@ -43,56 +43,74 @@ void set_dht11_gpio_mode(dht11_t *dht, uint8_t mode) {
 
 uint8_t readDHT11(dht11_t *dht) {
 	uint8_t data[5] = {0};
-	uint16_t high_time;
+	uint8_t bitIndex = 0;
+	uint16_t high_time = 0;
+	uint16_t low_time = 0;
 
 	//start komunikacji
 	set_dht11_gpio_mode(dht, OUTPUT);
-	__disable_irq();
 
 	HAL_GPIO_WritePin(dht->port, dht->pin, GPIO_PIN_RESET); // stan niski na 18ms
-	HAL_Delay(18);
+	delay_us(18000);
 	HAL_GPIO_WritePin(dht->port, dht->pin, GPIO_PIN_SET);
+	delay_us(20);
 	set_dht11_gpio_mode(dht, INPUT);
 
 
-    // Oczekiwanie na zbocze narastające sygnału (sygnał gotowości czujnika)
-	while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_SET);
-    while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_RESET);  // oczekiwanie na zbocze narastające
-    while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_SET);    // oczekiwanie na zbocze opadające
+	uint32_t timeout = HAL_GetTick() + 2;
 
-    // start PWM Input
-    HAL_TIM_IC_Start(dht->htim, TIM_CHANNEL_1);
-    HAL_TIM_IC_Start(dht->htim, TIM_CHANNEL_2);
+	while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_SET) {
+		if (HAL_GetTick() > timeout) return 1; // Timeout
+	}
 
-    for (uint8_t i = 0; i < 40; i++) {
-    	while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_RESET); // oczekiwanie na zbocze narastajace czyli bit
+	timeout = HAL_GetTick() + 2;
+	while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_RESET) {
+		if (HAL_GetTick() > timeout) return 1; // Timeout
+	}
 
-    	// Zresetowanie flag przechwytywania
-    	__HAL_TIM_CLEAR_FLAG(dht->htim, TIM_FLAG_CC1 | TIM_FLAG_CC2);
+	timeout = HAL_GetTick() + 2;
+	while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_SET) {
+		if (HAL_GetTick() > timeout) return 1; // Timeout
+	}
 
-    	while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_SET);
 
-    	uint16_t ccr1 = __HAL_TIM_GET_COMPARE(dht->htim, TIM_CHANNEL_1); // Zbocze narastające
-    	uint16_t ccr2 = __HAL_TIM_GET_COMPARE(dht->htim, TIM_CHANNEL_2); // Zbocze opadające
+	HAL_TIM_PWM_Start(dht->htim, TIM_CHANNEL_1);
+	HAL_TIM_PWM_Start(dht->htim, TIM_CHANNEL_2);
 
-    	if (ccr2 >= ccr1) high_time = ccr2 - ccr1;
-    	else high_time = (dht->htim->Init.Period - ccr1) + ccr2 + 1; //jesli timer zaczal liczyc od poczatku
+	for (bitIndex = 0; bitIndex < 40; bitIndex++) {
+			__HAL_TIM_CLEAR_FLAG(dht->htim, TIM_FLAG_CC1 | TIM_FLAG_CC2);
+			timeout = HAL_GetTick() + 1;
+			while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_RESET) {
+				if (HAL_GetTick() > timeout) {
+					USART_fsend(" timeout i=%u ", bitIndex);
+					return 1;
+				}
+			}
+			low_time = __HAL_TIM_GET_COMPARE(dht->htim, TIM_CHANNEL_1);
+	//		USART_fsend(" low=%u ", low_time);
 
-    	USART_fsend("(%d : %d)", ccr1, ccr2);
+			timeout = HAL_GetTick() + 1;
 
-    	data[i / 8] <<= 1;
-    	if (high_time > 50) data[i / 8] |= 1;
-    }
+			while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_SET){
+				if (HAL_GetTick() > timeout) {
+					USART_fsend(" timeout i=%u ", bitIndex);
+					return 1;
+				}
+			}
 
-    __enable_irq();
+			high_time = __HAL_TIM_GET_COMPARE(dht->htim, TIM_CHANNEL_2);
+			USART_fsend("(%u - %u) ", low_time, high_time);
 
-    if (data[4] != (data[0] + data[1] + data[2] + data[3])) {
-    	return 1;
-    }
+			if (high_time > 50) {
+				data[bitIndex / 8] |= (1 << (7 - (bitIndex % 8))); // bit 1
+			} else {
+				data[bitIndex / 8] &= ~(1 << (7 - (bitIndex % 8))); // bit 0
+			}
+		}
 
-    USART_fsend("DHT11 Data: Temp=%d.%d C, Humidity=%d.%d%%",
-                    data[2], data[3], data[0], data[1]);
+//	USART_fsend("DHT11 Data: Humidity=%d.%d%%", data[0], data[1]);
 
-    add_to_dht11_buf(dht, data);
+//
+//    add_to_dht11_buf(dht, data);
     return 0;
 }

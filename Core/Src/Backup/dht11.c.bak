@@ -42,6 +42,7 @@ void set_dht11_gpio_mode(dht11_t *dht, uint8_t mode) {
 }
 
 uint8_t readDHT11(dht11_t *dht) {
+	USART_fsend("  readingDHT11  ");
 	uint8_t data[5] = {0};
 	uint16_t high_time;
 
@@ -51,18 +52,19 @@ uint8_t readDHT11(dht11_t *dht) {
 
 	HAL_GPIO_WritePin(dht->port, dht->pin, GPIO_PIN_RESET); // stan niski na 18ms
 	HAL_Delay(18);
-	HAL_GPIO_WritePin(dht->port, dht->pin, GPIO_PIN_SET);
+//	HAL_GPIO_WritePin(dht->port, dht->pin, GPIO_PIN_SET);
 	set_dht11_gpio_mode(dht, INPUT);
 
 
-    // Oczekiwanie na zbocze narastające sygnału (sygnał gotowości czujnika)
-	while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_SET);
+	uint32_t timeout = HAL_GetTick() + 2;
+	while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_SET) {
+		if (HAL_GetTick() > timeout) return 1; // Timeout
+	}
     while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_RESET);  // oczekiwanie na zbocze narastające
     while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_SET);    // oczekiwanie na zbocze opadające
 
     // start PWM Input
     HAL_TIM_IC_Start(dht->htim, TIM_CHANNEL_1);
-    HAL_TIM_IC_Start(dht->htim, TIM_CHANNEL_2);
 
     for (uint8_t i = 0; i < 40; i++) {
     	while(HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_RESET); // oczekiwanie na zbocze narastajace czyli bit
@@ -83,6 +85,8 @@ uint8_t readDHT11(dht11_t *dht) {
     	data[i / 8] <<= 1;
     	if (high_time > 50) data[i / 8] |= 1;
     }
+
+    HAL_TIM_IC_Stop(dht->htim, TIM_CHANNEL_1);
 
     __enable_irq();
 
