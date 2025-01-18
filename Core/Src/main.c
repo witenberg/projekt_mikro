@@ -243,10 +243,48 @@ void count_us() {
 //    }
 //}
 
+void send_read(uint16_t start, uint16_t count) {
+    char frame[270] = {0};       // Bufor dla pełnej ramki odpowiedzi (max długość: 251 danych + nagłówek + CRC)
+    char measurement[11] = {0}; // Bufor na jeden pomiar (stała długość: 10 znaków + '\0')
+    uint16_t crc;               // Suma CRC
+    uint16_t length = count * 10 + 1; // Długość pola danych w ramce
+
+    // Nagłówek ramki z długością
+    uint16_t offset = snprintf(frame, sizeof(frame), ":MCPC%03u|", length);
+
+    // Iteracja od najnowszego pomiaru (bufor kolowy) do najstarszego
+    for (uint16_t i = 0; i < count; i++) {
+        uint16_t index = (pDHT->empty - start - i + DHT11_BUF_SIZE) % DHT11_BUF_SIZE;
+
+        // Pobranie danych pomiaru z bufora
+        uint8_t humidity_int = pDHT->buf[index][0];
+        uint8_t humidity_frac = pDHT->buf[index][1];
+        uint8_t temp_int = pDHT->buf[index][2];
+        uint8_t temp_frac = pDHT->buf[index][3];
+
+        // Formatuj pomiar w formacie "XX,X\YY,Y|"
+        snprintf(measurement, sizeof(measurement), "%02u,%01u\\%02u,%01u|",
+                 humidity_int, humidity_frac, temp_int, temp_frac);
+
+        // Dodaj pomiar bezpośrednio do ramki
+        strcat(frame + offset, measurement);
+        offset += strlen(measurement);
+    }
+
+    // Obliczenie CRC dla ramki (bez ':', CRC i ';')
+    crc = calculate_crc_string(frame + 1);
+
+    // Dodaj CRC na końcu ramki
+    snprintf(frame + offset, sizeof(frame) - offset, "%04X;", crc);
+
+    // Wysyłanie ramki odpowiedzi
+    USART_fsend("%s", frame);
+}
+
+
 void set_interval(uint32_t interval) {
 	systick_counter = 0;
 	measurement_interval = interval;
-
 }
 
 //:MCPCx
@@ -359,12 +397,16 @@ void process_frame() {
 		uint8_t start = validate_and_atoi(start_str, start_length);
 		uint8_t count = validate_and_atoi(count_str, count_length);
 
-		if (start < 1 || start > 750 || count < 1 || count > 21 || (start + count - 1) > 750) {
+		if (start < 1 || start > 750 || count < 1 || count > 25 || (start + count - 1) > 750) {
 			err(3);
 			return;
 		}
 
-		//USART_fsend("READ(%d - %d)", start, count);
+		if (start + count - 1 > pDHT->count) {
+			err(4);
+		}
+
+		send_read(start, count);
 		return;
 	}
 	else if (strncmp((char *)frame.data, "COUNT_DATA", 10) == 0) {
@@ -413,6 +455,9 @@ void process_frame() {
 		return;
 
 	}
+
+	else
+		err(2);
 }
 
 void reset_frame() {

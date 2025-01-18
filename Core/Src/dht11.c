@@ -117,11 +117,11 @@ uint8_t readDHT11(dht11_t *dht) {
             data[bitIndex / 8] &= ~(1 << (7 - (bitIndex % 8))); // Wyzerowanie bitu
         }
     }
-    USART_fsend("DHT11 Data: Humidity=%u.%u%%, Temp=%u.%u ", data[0], data[1], data[2], data[3]);
+    //USART_fsend("DHT11 Data: Humidity=%u.%u%%, Temp=%u.%u ", data[0], data[1], data[2], data[3]);
 
     if (data[4] == data[0] + data[1] + data[2] + data[3]) {
-    	USART_fsend(" giit ");
     	add_to_dht11_buf(dht, data);
+    	USART_fsend("%u:[%u.%u%, %u.%u]\n\r", dht->count, data[0], data[1], data[2], data[3]);
     }
     else USART_fsend(" zleee ");
     __enable_irq();
