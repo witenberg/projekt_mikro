@@ -1,4 +1,0 @@
-../Core/Src/dht11.c:9:6:init_dht11	1
-../Core/Src/dht11.c:18:6:add_to_dht11_buf	3
-../Core/Src/dht11.c:26:6:set_dht11_gpio_mode	3
-../Core/Src/dht11.c:44:9:readDHT11	13
