@@ -27,12 +27,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-
+extern volatile uint32_t systick_counter;
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/

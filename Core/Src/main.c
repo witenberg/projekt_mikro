@@ -82,8 +82,9 @@ volatile uint16_t USART_TX_EMPTY = 0;
 volatile uint16_t USART_TX_BUSY = 0;
 
 /* Flagi */
-volatile uint8_t DHT11_READ_FLAG = 0;
+volatile uint32_t systick_counter = 0;
 uint32_t measurement_interval = 5000;
+
 //volatile uint8_t is_handling = 0; // flaga sprawdzająca, czy jest aktualnie obsługiwany jakiś znak
 
 
@@ -144,6 +145,16 @@ uint16_t calculate_crc_byte(uint16_t crc, uint8_t data) {
 		else crc <<= 1;
 	}
 	return crc;
+}
+
+uint16_t calculate_crc_string(const char *data) {
+    uint16_t crc = 0xFFFF;
+
+    for (size_t i = 0; i < strlen(data); i++) {
+        crc = calculate_crc_byte(crc, (uint8_t)data[i]);
+    }
+
+    return crc;
 }
 
 uint8_t USART_kbhit(){
@@ -208,7 +219,6 @@ int16_t USART_getchar(){
 		 if (USART_RX_BUSY >= USART_RXBUF_SIZE) USART_RX_BUSY = 0;
 		 return tmp;
 	} else return -1;
-
 }
 
 void delay_us(uint16_t us) {
@@ -219,8 +229,6 @@ void delay_us(uint16_t us) {
 	while (__HAL_TIM_GET_COUNTER(&htim3) < us);
 
 	HAL_TIM_Base_Stop(&htim3);
-
-
 }
 
 void count_us() {
@@ -228,30 +236,50 @@ void count_us() {
 	__HAL_TIM_SET_COUNTER(&htim3, 0);
 	HAL_TIM_Base_Start(&htim3);
 }
-
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-    if (htim->Instance == TIM4) {
-    	DHT11_READ_FLAG = 1;
-    }
-}
+//
+//void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+//    if (htim->Instance == TIM4) {
+//    	DHT11_READ_FLAG = 1;
+//    }
+//}
 
 void set_interval(uint32_t interval) {
-
-	// dodac interwal > 16 bitow
-
+	systick_counter = 0;
 	measurement_interval = interval;
-	HAL_TIM_Base_Stop_IT(&htim4);
-	__HAL_TIM_SET_COUNTER(&htim4, 0);
-	__HAL_TIM_SET_AUTORELOAD(&htim4, interval - 1);
-	HAL_TIM_Base_Start_IT(&htim4);
 
-	USART_fsend("INTERVAL_OK");
 }
 
+//:MCPCx
 void get_interval() {
-	// tutaj bedzie ramka
-	USART_fsend("interval=%lu", measurement_interval);
+    char frame[25] = {0};   // Bufor dla ramki (upewnij się, że rozmiar jest wystarczający)
+    char data[19] = {0};    // Bufor dla danych używanych do obliczeń CRC
+    uint16_t crc;     // Suma CRC
+    char number_str[11] = {0};
+
+    snprintf(number_str, sizeof(number_str), "%lu", measurement_interval);
+    uint8_t number_length = strlen(number_str);
+    snprintf(data, sizeof(data), "MCPC%03u%lu", number_length, measurement_interval);
+    crc = calculate_crc_string(data);
+    snprintf(frame, sizeof(frame), ":%s%04X;", data, crc);
+
+    USART_fsend("%s", frame);
 }
+
+void get_count_data() {
+    char frame[20] = {0};       // Bufor dla ramki
+    char data[14] = {0};        // Bufor dla danych używanych do obliczeń CRC
+    uint16_t crc;               // Suma CRC
+    char number_str[6] = {0};   // Bufor do przechowywania liczby jako napisu
+
+    snprintf(number_str, sizeof(number_str), "%u", pDHT->count);
+    uint8_t number_length = strlen(number_str);
+    snprintf(data, sizeof(data), "MCPC%03u%s", number_length, number_str);
+    crc = calculate_crc_string(data);
+    snprintf(frame, sizeof(frame), ":%s%04X;", data, crc);
+
+    USART_fsend("%s", frame);
+}
+
 
 uint16_t validate_and_atoi(const char *str, size_t length) {
     uint16_t result = 0;
@@ -259,23 +287,42 @@ uint16_t validate_and_atoi(const char *str, size_t length) {
     // sprawdzanie czy kazdy znak to cyfra
     for (size_t i = 0; i < length; i++) {
         if (str[i] < '0' || str[i] > '9') {
-            //USART_fsend("invalid char '%c' during atoi\n", str[i]);
             return 0; // kod bledu
         }
         result = (result * 10) + (str[i] - '0');
     }
-
     return result;
 }
 
-//void err01() {
-//
-//}
+void err(uint8_t error_number) {
+    if (error_number < 1 || error_number > 4) {
+        return;
+    }
+    char message[19] = {0}; // Bufor na komunikat
+    uint16_t crc;
+
+    switch(error_number) {
+    case 1:
+    	crc = 0x2E77;
+    	break;
+    case 2:
+    	crc = 0x1E14;
+    	break;
+    case 3:
+    	crc = 0x0E35;
+    	break;
+    case 4:
+    	crc = 0x7ED2;
+    	break;
+    }
+    sprintf(message, ":MCPC005ERR0%u%04X;", error_number, crc);
+    USART_fsend("%s", message);
+}
 
 void process_frame() {
 
 	if (frame.length_int < 5 || frame.length_int > 256) {
-		//err01();
+		err(1);
 		return;
 	}
 
@@ -288,8 +335,7 @@ void process_frame() {
 		char *dash_ptr = strchr(start_ptr, '-');
 
 		if (!dash_ptr) {
-			USART_fsend("brak myslnika");
-			//err03();
+			err(3);
 			return;
 		}
 
@@ -298,16 +344,14 @@ void process_frame() {
 
 		size_t start_length = dash_ptr - (char *)frame.data - 4;
 		if (start_length >= sizeof(start_str)) {
-			USART_fsend("zly parametr");
-			//err03();
+			err(3);
 			return;
 		}
 		memcpy(start_str, frame.data + 4, start_length);
 
 		size_t count_length = (uint8_t *)frame.data + length - ((uint8_t *)dash_ptr + 1);
 		if (count_length >= sizeof(count_str)) {
-			//USART_fsend("zly parametr");
-			//err03();
+			err(3);
 			return;
 		}
 		memcpy(count_str, dash_ptr + 1, count_length);
@@ -316,8 +360,7 @@ void process_frame() {
 		uint8_t count = validate_and_atoi(count_str, count_length);
 
 		if (start < 1 || start > 750 || count < 1 || count > 21 || (start + count - 1) > 750) {
-			//USART_fsend("zly parametr");
-			//err03();
+			err(3);
 			return;
 		}
 
@@ -325,21 +368,14 @@ void process_frame() {
 		return;
 	}
 	else if (strncmp((char *)frame.data, "COUNT_DATA", 10) == 0) {
-		if (length != 10) {
-			//USART_fsend("wrong command");
-			//err02();
-			return;
-		}
-//		else {
-//			count_data();
-//			return;
-//		}
+		if (length != 10) err(2);
+		else get_count_data();
+		return;
 	}
 
 	else if (strncmp((char *)frame.data, "SET_INTERVAL", 12) == 0) {
 		if (length < 16 || length > 22) {
-			//USART_fsend("wrong command");
-			//err02();
+			err(2);
 			return;
 		}
 
@@ -348,7 +384,7 @@ void process_frame() {
 
 		for (uint8_t i = 0; i < numberLength; i++){
 			if (!isdigit((unsigned char)numberStr[i])) {
-				//err03();
+				err(1);
 				return;
 			}
 		}
@@ -356,27 +392,21 @@ void process_frame() {
 		char *endptr;
 		errno = 0; // globalna zmienna
 		uint32_t interval = strtoul(numberStr, &endptr, 10);
+		//USART_fsend("interval: %lu ", interval);
 
-//		if (*endptr != '\0') {
-//			//err03();
-//			//USART_fsend("blad przy konwersji");
-//			return;
-//		}
-
-		if (*endptr == '\0' || interval < 2000 || errno == ERANGE) {
-			//err03();
+		if (*endptr != '\0' || interval < 2000 || errno == ERANGE) {
+			err(3);
 			return;
 		}
 
 		set_interval(interval);
-		//USART_fsend("interval: %lu ", interval);
+		USART_fsend(":MCPC002OK06C5;");
 		return;
 	}
 
 	else if (strncmp((char *)frame.data, "GET_INTERVAL", 12) == 0) {
 		if (frame.length_int != 12) {
-			//USART_fsend("wrong command");
-			//err02();
+			err(2);
 			return;
 		}
 		get_interval();
@@ -415,7 +445,7 @@ void get_frame(uint8_t ch) {
 			if (frame.sender_id == 1) {
 				frame.sender[2] = '\0';
 				if (strncmp((char *)frame.sender, SENDER, 2) == 0){
-					//USART_fsend("sender ok");
+					USART_fsend("sender ok");
 					frame.state = FIND_RECEIVER;
 					return;
 				}
@@ -437,7 +467,7 @@ void get_frame(uint8_t ch) {
 			if (frame.receiver_id == 1) {
 				frame.receiver[2] = '\0';
 				if (strncmp((char *)frame.receiver, RECEIVER, 2) == 0) {
-					//USART_fsend("receiver ok");
+					USART_fsend("receiver ok");
 					frame.state = FIND_LENGTH;
 					return;
 				}
@@ -459,9 +489,15 @@ void get_frame(uint8_t ch) {
 			if (frame.length_id == 2) {
 				frame.length[3] = '\0';
 				frame.length_int = atoi((char *)frame.length);
-				//USART_fsend("length ok");
+				USART_fsend("length ok");
+
+				if (frame.length_int == 0) {
+					frame.state = FIND_CRC;
+					return;
+				}
 				frame.state = FIND_DATA;
 				return;
+
 			}
 			else frame.length_id++;
 		}
@@ -471,14 +507,12 @@ void get_frame(uint8_t ch) {
 
 	case FIND_DATA: {
 
-		if (frame.data_id + frame.masked_counter < frame.length_int) {
+//		if (frame.data_id + frame.masked_counter < frame.length_int) {
 
-			if (ch == FRAME_START || ch == FRAME_END) {
+			if (ch == FRAME_END) {
 				frame.state = IDLE;
 				return;
 			}
-
-			frame.crc_calculated = calculate_crc_byte(frame.crc_calculated, ch);
 
 			if (ch == MASK) {
 				frame.masked_counter++;
@@ -486,6 +520,7 @@ void get_frame(uint8_t ch) {
 				return;
 			}
 
+			frame.crc_calculated = calculate_crc_byte(frame.crc_calculated, ch);
 			frame.data[frame.data_id++] = ch;
 
 			if (frame.data_id + frame.masked_counter == frame.length_int) {
@@ -495,11 +530,10 @@ void get_frame(uint8_t ch) {
 			}
 			return;
 		}
-		else {
-			frame.state = IDLE;
-			return;
-		}
-	}
+//		else {
+//			frame.state = IDLE;
+//			return;
+//		}
 
 	case FIND_MASKED: {
 
@@ -511,16 +545,19 @@ void get_frame(uint8_t ch) {
 		switch(ch) {
 		case MASKED_START: {
 			frame.data[frame.data_id++] = FRAME_START;
+			frame.crc_calculated = calculate_crc_byte(frame.crc_calculated, FRAME_START);
 			frame.state = FIND_DATA;
 			break;
 		}
 		case MASKED_END: {
 			frame.data[frame.data_id++] = FRAME_END;
+			frame.crc_calculated = calculate_crc_byte(frame.crc_calculated, FRAME_END);
 			frame.state = FIND_DATA;
 			break;
 		}
 		case MASK: {
 			frame.data[frame.data_id++] = MASK;
+			frame.crc_calculated = calculate_crc_byte(frame.crc_calculated, MASK);
 			frame.state = FIND_DATA;
 			break;
 		}
@@ -529,8 +566,6 @@ void get_frame(uint8_t ch) {
 			return;
 		}
 		}
-
-		frame.crc_calculated = calculate_crc_byte(frame.crc_calculated, ch);
 
 		if (frame.data_id < frame.length_int - 1) {
 			frame.state = FIND_DATA;
@@ -548,12 +583,12 @@ void get_frame(uint8_t ch) {
 			if (frame.crc_id == 4) {
 				frame.crc_frame[4] = '\0';
 				if ((uint16_t)strtol((char *)frame.crc_frame, NULL, 16) == frame.crc_calculated) {
-					//USART_fsend("crc ok");
+					USART_fsend("crc ok");
 					frame.state = FIND_END;
 					return;
 				}
 				else {
-					//USART_fsend("crc blad");
+					USART_fsend("crc blad");
 					frame.state = IDLE;
 					return;
 				}
@@ -618,7 +653,7 @@ int main(void)
   MX_USART2_UART_Init();
   MX_TIM2_Init(); // pwm input
   MX_TIM3_Init(); // delay us, count us
-  MX_TIM4_Init(); // interval ms
+  //MX_TIM4_Init(); // interval ms
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim3);
   HAL_TIM_Base_Start_IT(&htim4);
@@ -631,11 +666,11 @@ int main(void)
 
   while (1)
   {
-	  // flaga z przerwania tim4
-	  if (DHT11_READ_FLAG) {
+	  if (systick_counter >= measurement_interval) {
+		  systick_counter = 0;
 		  readDHT11(pDHT);
-		  DHT11_READ_FLAG = 0;
 	  }
+
 	  // jeśli bufor nie jest pusty
 	  if (USART_RX_EMPTY != USART_RX_BUSY) {
 		  handle_char();

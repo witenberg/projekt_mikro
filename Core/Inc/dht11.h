@@ -25,7 +25,6 @@ typedef struct {
 
 	uint8_t buf[DHT11_BUF_SIZE][4];
 	uint16_t empty;
-	uint16_t busy;
 	uint16_t count;
 } dht11_t;
 
@@ -37,6 +36,7 @@ uint8_t readDHT11(dht11_t *dht);
 void USART_fsend(char* format, ...);
 void delay_us(uint16_t us);
 void count_us();
+void err(uint8_t error_number);
 
 
 #endif /* INC_DHT11_H_ */

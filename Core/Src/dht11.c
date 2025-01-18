@@ -11,17 +11,16 @@ void init_dht11(dht11_t *dht, GPIO_TypeDef* port, uint16_t pin, TIM_HandleTypeDe
 	dht->port = port;
 	dht->pin = pin;
 	dht->empty = 0;
-	dht->busy = 0;
 	dht->count = 0;
 }
 
 void add_to_dht11_buf(dht11_t *dht, uint8_t data[4]) {
 	for (uint8_t i = 0; i < 4; i++)
 		dht->buf[dht->empty][i] = data[i];
+
 	dht->empty = (dht->empty + 1) % DHT11_BUF_SIZE;
 	if (dht->count < DHT11_BUF_SIZE) dht->count++;
 }
-
 
 void set_dht11_gpio_mode(dht11_t *dht, uint8_t mode) {
 	GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -53,9 +52,9 @@ uint8_t readDHT11(dht11_t *dht) {
     __disable_irq();
     HAL_GPIO_WritePin(dht->port, dht->pin, GPIO_PIN_RESET); // Stan niski na 18ms
     delay_us(18000);
-    HAL_GPIO_WritePin(dht->port, dht->pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(dht->port, dht->pin, GPIO_PIN_SET); // stan wysoki 20us
     delay_us(20);
-    set_dht11_gpio_mode(dht, INPUT);
+    set_dht11_gpio_mode(dht, INPUT); // tryb na input
 
 
     count_us();
@@ -119,8 +118,13 @@ uint8_t readDHT11(dht11_t *dht) {
         }
     }
     USART_fsend("DHT11 Data: Humidity=%u.%u%%, Temp=%u.%u ", data[0], data[1], data[2], data[3]);
-    __enable_irq();
 
+    if (data[4] == data[0] + data[1] + data[2] + data[3]) {
+    	USART_fsend(" giit ");
+    	add_to_dht11_buf(dht, data);
+    }
+    else USART_fsend(" zleee ");
+    __enable_irq();
     return 0;
 }
 
