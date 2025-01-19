@@ -83,7 +83,7 @@ volatile uint16_t USART_TX_BUSY = 0;
 
 /* Flagi */
 volatile uint32_t systick_counter = 0;
-uint32_t measurement_interval = 5000;
+uint32_t measurement_interval = 2500;
 
 //volatile uint8_t is_handling = 0; // flaga sprawdzająca, czy jest aktualnie obsługiwany jakiś znak
 
@@ -157,20 +157,20 @@ uint16_t calculate_crc_string(const char *data) {
     return crc;
 }
 
-uint8_t USART_kbhit(){
-	if (USART_RX_EMPTY == USART_RX_BUSY){
-		return 0;
-	} else {
-		return 1;
-	}
-}
+//uint8_t USART_kbhit(){
+//	if (USART_RX_EMPTY == USART_RX_BUSY){
+//		return 0;
+//	} else {
+//		return 1;
+//	}
+//}
 
 void USART_fsend(char* format, ...) {
-	char tmp[256];
-	va_list arglist;
-	va_start(arglist, format);
-	vsprintf(tmp, format, arglist);
-	va_end(arglist);
+	char tmp[265]; // maks rozmiar ramki
+	va_list arglist; // arglist - wskaznik do struktury z przekazanymi argumentami
+	va_start(arglist, format); // ustawienie wskaznika w arglist na pierwszy zmienny argument (pierwszy po format)
+	vsprintf(tmp, format, arglist); // wstawienie do tmp formatowanego lancucha uzupelnionego o argumenty z arglist
+	va_end(arglist); // koniec przetwarzania, zwolnienie zasobow
 	volatile int idx = USART_TX_EMPTY;
 	for (int i = 0; i < strlen(tmp); i++) {
 		USART_BUF_TX[idx] = tmp[i];
@@ -201,7 +201,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 /* === USART TRANSMIT CALLBACK === */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart == &huart2) {
-        // sprawdzenie, czy są dane do wysłania
         if (USART_TX_EMPTY != USART_TX_BUSY) {
         	uint8_t tmp = USART_BUF_TX[USART_TX_BUSY];
         	USART_TX_BUSY++;
@@ -244,7 +243,7 @@ void count_us() {
 //}
 
 void send_read(uint16_t start, uint16_t count) {
-    char frame[270] = {0};       // Bufor dla pełnej ramki odpowiedzi (max długość: 251 danych + nagłówek + CRC)
+    char frame[300] = {0};       // Bufor dla pełnej ramki odpowiedzi (max długość: 251 danych + nagłówek + CRC)
     char measurement[11] = {0}; // Bufor na jeden pomiar (stała długość: 10 znaków + '\0')
     uint16_t crc;               // Suma CRC
     uint16_t length = count * 10 + 1; // Długość pola danych w ramce
@@ -270,7 +269,7 @@ void send_read(uint16_t start, uint16_t count) {
         strcat(frame + offset, measurement);
         offset += strlen(measurement);
     }
-
+    //USART_fsend("done");
     // Obliczenie CRC dla ramki (bez ':', CRC i ';')
     crc = calculate_crc_string(frame + 1);
 
@@ -404,6 +403,7 @@ void process_frame() {
 
 		if (start + count - 1 > pDHT->count) {
 			err(4);
+			return;
 		}
 
 		send_read(start, count);
@@ -456,8 +456,7 @@ void process_frame() {
 
 	}
 
-	else
-		err(2);
+	else err(2);
 }
 
 void reset_frame() {
@@ -466,7 +465,13 @@ void reset_frame() {
 	frame.crc_calculated = 0xFFFF;
 }
 
-void get_frame(uint8_t ch) {
+void get_frame() {
+
+	int16_t ch;
+	if ((ch = USART_getchar()) <= 0) {
+		frame.state = IDLE;
+		return;
+	} else ch = (uint8_t)ch;
 
 	if (ch == FRAME_START) {
 		reset_frame();
@@ -656,13 +661,12 @@ void get_frame(uint8_t ch) {
 	}
 }
 
-void handle_char() {
-	int16_t ch;
-	if ((ch = USART_getchar()) >= 0) {
-		//USART_fsend("  |%c|  ", ch);
-		get_frame((uint8_t)ch);
-	}
-}
+//void handle_char() {
+//	int16_t ch;
+//	if ((ch = USART_getchar()) >= 0) {
+//		get_frame((uint8_t)ch);
+//	}
+//}
 
 /* USER CODE END 0 */
 
@@ -708,7 +712,6 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-
   while (1)
   {
 	  if (systick_counter >= measurement_interval) {
@@ -718,7 +721,7 @@ int main(void)
 
 	  // jeśli bufor nie jest pusty
 	  if (USART_RX_EMPTY != USART_RX_BUSY) {
-		  handle_char();
+		  get_frame();
 	  }
 
 
