@@ -44,13 +44,12 @@ uint8_t readDHT11(dht11_t *dht) {
     uint8_t data[5] = {0};
     uint8_t bitIndex = 0;
     uint16_t high_time = 0;
-//    uint16_t low_time = 0;
 
-    // Start komunikacji
+    // start komunikacji
     set_dht11_gpio_mode(dht, OUTPUT);
 
     __disable_irq();
-    HAL_GPIO_WritePin(dht->port, dht->pin, GPIO_PIN_RESET); // Stan niski na 18ms
+    HAL_GPIO_WritePin(dht->port, dht->pin, GPIO_PIN_RESET); // stan niski na 18ms
     delay_us(18000);
     HAL_GPIO_WritePin(dht->port, dht->pin, GPIO_PIN_SET); // stan wysoki 20us
     delay_us(20);
@@ -68,7 +67,6 @@ uint8_t readDHT11(dht11_t *dht) {
     count_us();
     while (HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_RESET) {
         if (__HAL_TIM_GET_COUNTER(&htim3) >= 2000) {
-        	//USART_fsend("timeout2");
             __enable_irq();
             return 1; // Timeout
         }
@@ -77,7 +75,6 @@ uint8_t readDHT11(dht11_t *dht) {
     count_us();
     while (HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_SET) {
         if (__HAL_TIM_GET_COUNTER(&htim3) >= 2000) {
-        	//USART_fsend("timeout3");
             __enable_irq();
             return 1; // Timeout
         }
@@ -87,43 +84,35 @@ uint8_t readDHT11(dht11_t *dht) {
     HAL_TIM_PWM_Start(dht->htim, TIM_CHANNEL_2);
 
     for (bitIndex = 0; bitIndex < 40; bitIndex++) {
-        __HAL_TIM_CLEAR_FLAG(dht->htim, TIM_FLAG_CC1 | TIM_FLAG_CC2);
+//        __HAL_TIM_CLEAR_FLAG(dht->htim, TIM_FLAG_CC1 | TIM_FLAG_CC2);
 
         count_us();
         while (HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_RESET) {
             if (__HAL_TIM_GET_COUNTER(&htim3) >= 1000) {
-                //USART_fsend(" timeout i=%u ", bitIndex);
                 __enable_irq();
                 return 1;
             }
         }
-//        low_time = __HAL_TIM_GET_COMPARE(dht->htim, TIM_CHANNEL_1);
-
         count_us();
         while (HAL_GPIO_ReadPin(dht->port, dht->pin) == GPIO_PIN_SET) {
             if (__HAL_TIM_GET_COUNTER(&htim3) >= 1000) {
-                //USART_fsend(" timeout i=%u ", bitIndex);
                 __enable_irq();
                 return 1;
             }
         }
         high_time = __HAL_TIM_GET_COMPARE(dht->htim, TIM_CHANNEL_2);
 
-        //USART_fsend("(%u - %u) ", low_time, high_time);
 
         if (high_time > 50) {
-            data[bitIndex / 8] |= (1 << (7 - (bitIndex % 8))); // Ustawienie bitu
+            data[bitIndex / 8] |= (1 << (7 - (bitIndex % 8))); // ustawienie bitu
         } else {
-            data[bitIndex / 8] &= ~(1 << (7 - (bitIndex % 8))); // Wyzerowanie bitu
+            data[bitIndex / 8] &= ~(1 << (7 - (bitIndex % 8))); // wyzerowanie bitu
         }
     }
-    //USART_fsend("DHT11 Data: Humidity=%u.%u%%, Temp=%u.%u ", data[0], data[1], data[2], data[3]);
 
     if (data[4] == data[0] + data[1] + data[2] + data[3]) {
     	add_to_dht11_buf(dht, data);
-    	USART_fsend("%u:[%u.%u%, %u.%u]\n\r", dht->count, data[0], data[1], data[2], data[3]);
     }
-    else USART_fsend(" zleee ");
     __enable_irq();
     return 0;
 }

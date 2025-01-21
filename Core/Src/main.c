@@ -83,9 +83,7 @@ volatile uint16_t USART_TX_BUSY = 0;
 
 /* Flagi */
 volatile uint32_t systick_counter = 0;
-uint32_t measurement_interval = 2500;
-
-//volatile uint8_t is_handling = 0; // flaga sprawdzająca, czy jest aktualnie obsługiwany jakiś znak
+uint32_t measurement_interval = 5000; // domyślna wartość interwału ustawiona na 5 sekund
 
 
 /* Stany */
@@ -124,7 +122,7 @@ typedef struct {
 Frame frame;
 
 dht11_t dht;
-dht11_t *pDHT = &dht;
+dht11_t *pDHT = &dht; // wskaźnik do struktury dht11
 
 /* USER CODE END PV */
 
@@ -139,15 +137,16 @@ void SystemClock_Config(void);
 
 /* === CRC === */
 uint16_t calculate_crc_byte(uint16_t crc, uint8_t data) {
-	crc ^= (data << 8);
-	for (uint8_t i = 0; i < 8; i++) {
-		if (crc & 0x8000) crc = (crc << 1) ^ 0x1021;
-		else crc <<= 1;
+	crc ^= (data << 8); // xor aktualnej sumy z nowym bajtem przesuniętym o 8 bitów w lewo
+
+	for (uint8_t i = 0; i < 8; i++) { // iteracja po każdym bicie nowego bajtu
+		if (crc & 0x8000) crc = (crc << 1) ^ 0x1021; // jeśli najbardziej znaczący bit crc jest równy 1,
+		else crc <<= 1;								// xor przesuniętego crc z wielomianem, jeśli nie - samo przesunięcie
 	}
-	return crc;
+	return crc; // zwrócenie sumy bez końcowego xor
 }
 
-uint16_t calculate_crc_string(const char *data) {
+uint16_t calculate_crc_string(const char *data) { // obliczanie sumy crc dla całego ciągu znaków
     uint16_t crc = 0xFFFF;
 
     for (size_t i = 0; i < strlen(data); i++) {
@@ -157,13 +156,6 @@ uint16_t calculate_crc_string(const char *data) {
     return crc;
 }
 
-//uint8_t USART_kbhit(){
-//	if (USART_RX_EMPTY == USART_RX_BUSY){
-//		return 0;
-//	} else {
-//		return 1;
-//	}
-//}
 
 void USART_fsend(char* format, ...) {
 	char tmp[265]; // maks rozmiar ramki
@@ -235,48 +227,38 @@ void count_us() {
 	__HAL_TIM_SET_COUNTER(&htim3, 0);
 	HAL_TIM_Base_Start(&htim3);
 }
-//
-//void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-//    if (htim->Instance == TIM4) {
-//    	DHT11_READ_FLAG = 1;
-//    }
-//}
 
-void send_read(uint16_t start, uint16_t count) {
-    char frame[300] = {0};       // Bufor dla pełnej ramki odpowiedzi (max długość: 251 danych + nagłówek + CRC)
-    char measurement[11] = {0}; // Bufor na jeden pomiar (stała długość: 10 znaków + '\0')
-    uint16_t crc;               // Suma CRC
-    uint16_t length = count * 10 + 1; // Długość pola danych w ramce
 
-    // Nagłówek ramki z długością
+void send_read(uint16_t start, uint8_t count) {
+    char frame[265] = {0};       // bufor dla pełnej ramki odpowiedzi (max długość: 251 danych + nagłówek + CRC)
+    char measurement[11] = {0}; // bufor na jeden pomiar (stała długość: 10 znaków + '\0')
+    uint16_t crc;               // suma crc
+    uint16_t length = count * 10 + 1; // długość pola danych w ramce
+
     uint16_t offset = snprintf(frame, sizeof(frame), ":MCPC%03u|", length);
 
-    // Iteracja od najnowszego pomiaru (bufor kolowy) do najstarszego
-    for (uint16_t i = 0; i < count; i++) {
+    // iteracja od najnowszego pomiaru do najstarszego
+    for (uint8_t i = 0; i < count; i++) {
         uint16_t index = (pDHT->empty - start - i + DHT11_BUF_SIZE) % DHT11_BUF_SIZE;
 
-        // Pobranie danych pomiaru z bufora
+        // pobranie danych pomiaru z bufora
         uint8_t humidity_int = pDHT->buf[index][0];
         uint8_t humidity_frac = pDHT->buf[index][1];
         uint8_t temp_int = pDHT->buf[index][2];
         uint8_t temp_frac = pDHT->buf[index][3];
 
-        // Formatuj pomiar w formacie "XX,X\YY,Y|"
+        // formatowanie pomiaru w formacie "XX,X\YY,Y|"
         snprintf(measurement, sizeof(measurement), "%02u,%01u\\%02u,%01u|",
-                 humidity_int, humidity_frac, temp_int, temp_frac);
+                 humidity_int % 100, humidity_frac % 10, temp_int % 100, temp_frac % 10);
 
-        // Dodaj pomiar bezpośrednio do ramki
+        // dodanie do ramki
         strcat(frame + offset, measurement);
         offset += strlen(measurement);
     }
-    //USART_fsend("done");
-    // Obliczenie CRC dla ramki (bez ':', CRC i ';')
+
+    // obliczenie CRC dla ramki (bez ':', CRC i ';')
     crc = calculate_crc_string(frame + 1);
-
-    // Dodaj CRC na końcu ramki
     snprintf(frame + offset, sizeof(frame) - offset, "%04X;", crc);
-
-    // Wysyłanie ramki odpowiedzi
     USART_fsend("%s", frame);
 }
 
@@ -284,13 +266,14 @@ void send_read(uint16_t start, uint16_t count) {
 void set_interval(uint32_t interval) {
 	systick_counter = 0;
 	measurement_interval = interval;
+	USART_fsend(":MCPC002OK06C5;");
 }
 
 //:MCPCx
 void get_interval() {
-    char frame[25] = {0};   // Bufor dla ramki (upewnij się, że rozmiar jest wystarczający)
-    char data[19] = {0};    // Bufor dla danych używanych do obliczeń CRC
-    uint16_t crc;     // Suma CRC
+    char frame[25] = {0};   // bufor na pełną ramkę
+    char data[19] = {0};    // bufor dla danych używanych do obliczeń CRC
+    uint16_t crc;     // suma CRC
     char number_str[11] = {0};
 
     snprintf(number_str, sizeof(number_str), "%lu", measurement_interval);
@@ -303,10 +286,10 @@ void get_interval() {
 }
 
 void get_count_data() {
-    char frame[20] = {0};       // Bufor dla ramki
-    char data[14] = {0};        // Bufor dla danych używanych do obliczeń CRC
-    uint16_t crc;               // Suma CRC
-    char number_str[6] = {0};   // Bufor do przechowywania liczby jako napisu
+    char frame[20] = {0};       // bufor na ramke
+    char data[14] = {0};        // bufor dla danych używanych do obliczeń CRC
+    uint16_t crc;               // suma CRC
+    char number_str[6] = {0};   // bufor do przechowywania liczby jako napisu
 
     snprintf(number_str, sizeof(number_str), "%u", pDHT->count);
     uint8_t number_length = strlen(number_str);
@@ -335,7 +318,7 @@ void err(uint8_t error_number) {
     if (error_number < 1 || error_number > 4) {
         return;
     }
-    char message[19] = {0}; // Bufor na komunikat
+    char message[19] = {0};
     uint16_t crc;
 
     switch(error_number) {
@@ -363,8 +346,8 @@ void process_frame() {
 		return;
 	}
 
-	uint8_t length = frame.length_int - frame.masked_counter; // dla odkodowanej ramki dlugosc musi byc pomniejszona o ilosc zamaskowanych znakow
-
+	// dla odkodowanej ramki dlugosc musi byc pomniejszona o ilosc zamaskowanych znakow
+	uint8_t length = frame.length_int - frame.masked_counter;
 
 	if (strncmp((char *)frame.data, "READ", 4) == 0) {
 
@@ -393,8 +376,8 @@ void process_frame() {
 		}
 		memcpy(count_str, dash_ptr + 1, count_length);
 
-		uint8_t start = validate_and_atoi(start_str, start_length);
-		uint8_t count = validate_and_atoi(count_str, count_length);
+		uint16_t start = validate_and_atoi(start_str, start_length);
+		uint16_t count = validate_and_atoi(count_str, count_length);
 
 		if (start < 1 || start > 750 || count < 1 || count > 25 || (start + count - 1) > 750) {
 			err(3);
@@ -425,7 +408,7 @@ void process_frame() {
 		uint8_t numberLength = length - 12;
 
 		for (uint8_t i = 0; i < numberLength; i++){
-			if (!isdigit((unsigned char)numberStr[i])) {
+			if (!isdigit((uint8_t)numberStr[i])) {
 				err(1);
 				return;
 			}
@@ -434,7 +417,6 @@ void process_frame() {
 		char *endptr;
 		errno = 0; // globalna zmienna
 		uint32_t interval = strtoul(numberStr, &endptr, 10);
-		//USART_fsend("interval: %lu ", interval);
 
 		if (*endptr != '\0' || interval < 2000 || errno == ERANGE) {
 			err(3);
@@ -442,7 +424,6 @@ void process_frame() {
 		}
 
 		set_interval(interval);
-		USART_fsend(":MCPC002OK06C5;");
 		return;
 	}
 
@@ -495,7 +476,7 @@ void get_frame() {
 			if (frame.sender_id == 1) {
 				frame.sender[2] = '\0';
 				if (strncmp((char *)frame.sender, SENDER, 2) == 0){
-					USART_fsend("sender ok");
+//					USART_fsend("sender ok");
 					frame.state = FIND_RECEIVER;
 					return;
 				}
@@ -517,7 +498,7 @@ void get_frame() {
 			if (frame.receiver_id == 1) {
 				frame.receiver[2] = '\0';
 				if (strncmp((char *)frame.receiver, RECEIVER, 2) == 0) {
-					USART_fsend("receiver ok");
+//					USART_fsend("receiver ok");
 					frame.state = FIND_LENGTH;
 					return;
 				}
@@ -539,7 +520,7 @@ void get_frame() {
 			if (frame.length_id == 2) {
 				frame.length[3] = '\0';
 				frame.length_int = atoi((char *)frame.length);
-				USART_fsend("length ok");
+//				USART_fsend("length ok");
 
 				if (frame.length_int == 0) {
 					frame.state = FIND_CRC;
@@ -575,7 +556,7 @@ void get_frame() {
 
 			if (frame.data_id + frame.masked_counter == frame.length_int) {
 				frame.data[frame.data_id] = '\0';
-				USART_fsend("data ok");
+//				USART_fsend("data ok");
 				frame.state = FIND_CRC;
 			}
 			return;
@@ -633,12 +614,12 @@ void get_frame() {
 			if (frame.crc_id == 4) {
 				frame.crc_frame[4] = '\0';
 				if ((uint16_t)strtol((char *)frame.crc_frame, NULL, 16) == frame.crc_calculated) {
-					USART_fsend("crc ok");
+//					USART_fsend("crc ok");
 					frame.state = FIND_END;
 					return;
 				}
 				else {
-					USART_fsend("crc blad");
+//					USART_fsend("crc blad");
 					frame.state = IDLE;
 					return;
 				}
@@ -651,7 +632,7 @@ void get_frame() {
 	case FIND_END: {
 		if (ch == FRAME_END) {
 			frame.complete = true;
-			USART_fsend("ramka ok");
+//			USART_fsend("ramka ok");
 			process_frame();
 			return;
 		}
